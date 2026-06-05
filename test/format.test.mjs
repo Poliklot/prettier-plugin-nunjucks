@@ -140,8 +140,58 @@ describe('prettier-plugin-nunjucks formatting', () => {
     assert.equal(output.includes('images: ['), true);
     assert.equal(output.includes('imageSettings: ['), true);
     assert.equal(output.includes('  hitboxViewBox: "0 0 230 425",'), true);
-    assert.equal(output.includes('})\n}}'), true);
+    assert.equal(output.includes('{{ render_product_price_block({\n  title: "Текстиль",'), true);
+    assert.equal(output.includes('}) }}'), true);
     assert.equal(await format(output, { printWidth: 100 }), output);
+  });
+
+  it('does not leave the closing angle alone when a tag with attributes breaks', async () => {
+    const source = '<div class="vertical-sections-slider swiper" data-vertical-sections-slider></div>';
+    const output = await format(source, { printWidth: 80 });
+
+    assert.equal(output.includes('data-vertical-sections-slider\n>'), true);
+    assert.equal(output.includes('<div class="vertical-sections-slider swiper" data-vertical-sections-slider\n>'), false);
+    assert.equal(await format(output, { printWidth: 80 }), output);
+  });
+
+  it('keeps multiline Nunjucks variable calls inline with their delimiters', async () => {
+    const source = `<div class="slide">
+{{ render_product_price_block({                       
+        title: "Текстиль",
+        images: [
+          "one.webp",
+          "two.webp"
+        ]
+      }) }}
+</div>`;
+    const output = await format(source, { printWidth: 100 });
+
+    assert.equal(output.includes('  {{ render_product_price_block({\n    title: "Текстиль",'), true);
+    assert.equal(output.includes('    images: [\n      "one.webp",'), true);
+    assert.equal(output.includes('  }) }}'), true);
+    assert.equal(output.includes('  {{\n'), false);
+    assert.equal(await format(output, { printWidth: 100 }), output);
+  });
+
+  it('supports custom Nunjucks block and fork tags', async () => {
+    const source = `{% remote "/stuff" %}
+  This content will be replaced with the content from /stuff
+      {% error %}
+            There was an error fetching /stuff
+          {% endremote %}`;
+    const output = await format(source, { blockTags: ['remote'], forkTags: ['error'] });
+
+    assert.equal(output, `{% remote "/stuff" %}
+  This content will be replaced with the content from /stuff
+{% error %}
+  There was an error fetching /stuff
+{% endremote %}
+`);
+    assert.equal(await format(output, { blockTags: ['remote'], forkTags: ['error'] }), output);
+  });
+
+  it('registers the legacy .nunj extension alias', () => {
+    assert.equal(plugin.languages[0].extensions.includes('.nunj'), true);
   });
 
   it('keeps Nunjucks assignment and filter expressions readable', async () => {

@@ -86,7 +86,7 @@ export interface MustacheStatement extends MustacheBase, SourceRange {
 
 export interface ElseBranch extends MustacheBase, SourceRange {
   type: 'ElseBranch';
-  branchKeyword?: 'elif' | 'elseif';
+  branchKeyword?: string;
   program: Program;
 }
 

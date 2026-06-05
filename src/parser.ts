@@ -17,7 +17,7 @@ import { voidElements, rawTextElements, whitespaceSensitiveRawTextElements } fro
 import { locEnd, locStart, normalizeInput, withOptionalRange, withRange } from 'template-format-core';
 import { normalizeTemplateExpression, parseTemplateExpression } from 'template-format-core';
 import type { TemplateToken as CoreTemplateToken } from 'template-format-core';
-type MustacheToken = CoreTemplateToken & { branchKeyword?: 'else' | 'elif' | 'elseif' };
+type MustacheToken = CoreTemplateToken & { branchKeyword?: string };
 import { whitespace } from 'template-format-core';
 import { nunjucksDialect } from './dialects/nunjucks/tokens';
 
@@ -32,10 +32,53 @@ interface ParseResult {
 
 const templateDialect = nunjucksDialect;
 
-export function parse(text: string): Program {
-  const normalizedText = normalizeInput(text);
-  const { nodes } = parseChildren(normalizedText, 0, null, null);
-  return withRange({ type: 'Program', body: nodes }, 0, normalizedText.length);
+interface NunjucksParserOptions {
+  blockTags?: string[];
+  inlineTags?: string[];
+  forkTags?: string[];
+}
+
+interface CustomTagConfig {
+  blockTags: Set<string>;
+  inlineTags: Set<string>;
+  forkTags: Set<string>;
+}
+
+const emptyCustomTagConfig: CustomTagConfig = {
+  blockTags: new Set(),
+  inlineTags: new Set(),
+  forkTags: new Set(),
+};
+
+let activeCustomTagConfig = emptyCustomTagConfig;
+
+export function parse(text: string, options: NunjucksParserOptions = {}): Program {
+  const previousCustomTagConfig = activeCustomTagConfig;
+  activeCustomTagConfig = buildCustomTagConfig(options);
+
+  try {
+    const normalizedText = normalizeInput(text);
+    const { nodes } = parseChildren(normalizedText, 0, null, null);
+    return withRange({ type: 'Program', body: nodes }, 0, normalizedText.length);
+  } finally {
+    activeCustomTagConfig = previousCustomTagConfig;
+  }
+}
+
+function buildCustomTagConfig(options: NunjucksParserOptions): CustomTagConfig {
+  return {
+    blockTags: new Set(normalizeTagOption(options.blockTags)),
+    inlineTags: new Set(normalizeTagOption(options.inlineTags)),
+    forkTags: new Set(normalizeTagOption(options.forkTags)),
+  };
+}
+
+function normalizeTagOption(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
 }
 
 function startsTemplateTag(text: string, position: number): boolean {
@@ -43,7 +86,33 @@ function startsTemplateTag(text: string, position: number): boolean {
 }
 
 function parseMustacheToken(text: string, position: number): MustacheToken {
-  return templateDialect.parseToken(text, position) as MustacheToken;
+  return applyCustomTagOptions(templateDialect.parseToken(text, position) as MustacheToken);
+}
+
+function applyCustomTagOptions(token: MustacheToken): MustacheToken {
+  const name = token.name;
+  if (token.kind !== 'mustache' || !token.triple || !name) {
+    return token;
+  }
+
+  if (activeCustomTagConfig.inlineTags.has(name)) {
+    return { ...token, kind: 'mustache', specialForm: undefined };
+  }
+
+  if (activeCustomTagConfig.forkTags.has(name)) {
+    return {
+      ...token,
+      kind: 'else',
+      specialForm: 'elseIf',
+      branchKeyword: name,
+    };
+  }
+
+  if (activeCustomTagConfig.blockTags.has(name)) {
+    return { ...token, kind: 'blockStart' };
+  }
+
+  return token;
 }
 
 function findNextHandlebarsOpen(text: string, position: number): number {
@@ -455,8 +524,11 @@ function parseBlock(
     let currentPosition = afterProgram;
 
     while (currentElseToken?.specialForm === 'elseIf') {
-      const branchKeyword = currentElseToken.branchKeyword === 'elseif' ? 'elseif' : 'elif';
-      const branchExpressionSource = currentElseToken.content.replace(new RegExp('^' + branchKeyword + '\\s+'), '');
+      const branchKeyword = currentElseToken.branchKeyword ?? 'elif';
+      const branchExpressionSource = currentElseToken.content.replace(
+        new RegExp('^' + escapeRegExp(branchKeyword) + '(?:\\s+|$)'),
+        '',
+      );
       const branchInfo = parseExpression(branchExpressionSource);
       const { type: _branchType, ...branchExpression } = branchInfo;
       const {
@@ -540,6 +612,10 @@ function getBlockExpression(token: MustacheToken): string {
 
 function getBlockPrefix(token: MustacheToken): '#' | '#>' | '#*' | '^' | '<' | '$' {
   return templateDialect.getBlockPrefix(token);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function shouldPreserveUnclosedBlockRemainder(token: MustacheToken): boolean {

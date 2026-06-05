@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- Kept multiline Nunjucks variable calls inline with their delimiters, e.g. `{{ render_component({ ... }) }}`, while still normalizing nested object and array indentation.
+- Added custom extension tag options: `blockTags`, `inlineTags`, and `forkTags`.
+- Added `.nunj` as a recognized Nunjucks file extension.
+- Improved wrapped HTML start tags so a broken tag does not leave the closing `>` alone after otherwise inline attributes.
+- Added regression tests for large macro calls, custom `remote` / `error` extension tags, `.nunj` registration, and wrapped HTML attributes.
+
 ## 0.1.1
 
 - Improved formatting for large Nunjucks macro/function calls with object and array literals.

@@ -1039,12 +1039,7 @@ function printElement(path: AstPath<ElementNode>, options: ParserOptions, print:
         hardline,
       ]);
     } else {
-      attributesDoc = node.selfClosing
-        ? concat([indent(concat([line, join(line, attrsDocs)])), softline])
-        : concat([
-            group(indent(concat([line, join(line, attrsDocs)]))),
-            softline,
-          ]);
+      attributesDoc = concat([indent(concat([line, join(line, attrsDocs)])), softline]);
     }
   }
 
@@ -1350,7 +1345,7 @@ function stringifyCompactClassBlock(block: BlockStatement): string {
     .map((branch) => {
       const branchExpression = buildExpression(branch);
       const openBranch = buildTemplateTag(
-        `${branch.branchKeyword ?? templateDialect.getElseKeyword()} ${branchExpression}`,
+        buildBranchTagContent(branch.branchKeyword ?? templateDialect.getElseKeyword(), branchExpression),
         getTrimOpen(branch),
         getTrimClose(branch),
       );
@@ -1825,7 +1820,7 @@ function stringifyNode(node: Node): string {
         .map((branch) => {
           const branchExpression = buildExpression(branch);
           const openBranch = buildTemplateTag(
-            `${branch.branchKeyword ?? templateDialect.getElseKeyword()} ${branchExpression}`,
+            buildBranchTagContent(branch.branchKeyword ?? templateDialect.getElseKeyword(), branchExpression),
             getTrimOpen(branch),
             getTrimClose(branch),
           );
@@ -2074,6 +2069,10 @@ function printMustache(node: MustacheStatement, options: ParserOptions): Doc {
   const inlineContent = expressionToDoc(content);
   const { open, close } = getTemplateTagDelimiters(node.triple);
 
+  if (!node.triple && content.includes('\n')) {
+    return printInlineMultilineMustache(node, content, open, close);
+  }
+
   return printCallableStatement(node, {
     open,
     close,
@@ -2083,6 +2082,25 @@ function printMustache(node: MustacheStatement, options: ParserOptions): Doc {
     closePadding: getMustacheClosePadding(node, content),
     multiline: !node.triple && !content.includes('\n') && shouldPrintCallableMultiline(node, content, options, true),
   });
+}
+
+function printInlineMultilineMustache(
+  node: MustacheStatement,
+  content: string,
+  open: string,
+  close: string,
+): Doc {
+  return group(
+    concat([
+      open,
+      getTrimOpen(node),
+      getMustacheOpenPadding(node, content),
+      join(hardline, content.split('\n')),
+      getMustacheClosePadding(node, content),
+      getTrimClose(node),
+      close,
+    ]),
+  );
 }
 
 function printDecorator(node: DecoratorStatement, options: ParserOptions): Doc {
@@ -2223,6 +2241,10 @@ function printFinalElseOpen(node: BlockStatement): Doc {
     node.inverseTrimOpen ? '-' : '',
     node.inverseTrimClose ? '-' : '',
   );
+}
+
+function buildBranchTagContent(keyword: string, expression: string): string {
+  return expression.length > 0 ? `${keyword} ${expression}` : keyword;
 }
 
 function printElseBranchOpen(node: ElseBranch): Doc {

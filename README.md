@@ -4,7 +4,7 @@
 
 Prettier plugin for HTML-heavy [Nunjucks](https://mozilla.github.io/nunjucks/) templates.
 
-It formats `.njk` / `.nunjucks` files with stable, idempotent output and keeps Nunjucks statement tags, variables, comments, whitespace-control markers, and raw/verbatim blocks in the Nunjucks syntax instead of treating them as Handlebars or generic HTML.
+It formats `.njk` / `.nunjucks` / `.nunj` files with stable, idempotent output and keeps Nunjucks statement tags, variables, comments, whitespace-control markers, and raw/verbatim blocks in the Nunjucks syntax instead of treating them as Handlebars or generic HTML.
 
 ## Install
 
@@ -22,7 +22,7 @@ module.exports = {
   plugins: ["prettier-plugin-nunjucks"],
   overrides: [
     {
-      files: ["*.njk", "*.nunjucks"],
+      files: ["*.njk", "*.nunjucks", "*.nunj"],
       options: {
         parser: "nunjucks",
       },
@@ -56,7 +56,7 @@ module.exports = {
   plugins: ["prettier-plugin-nunjucks"],
   overrides: [
     {
-      files: ["src/**/*.{njk,nunjucks}"],
+      files: ["src/**/*.{njk,nunjucks,nunj}"],
       options: {
         parser: "nunjucks",
       },
@@ -91,7 +91,7 @@ module.exports = {
   plugins: ["prettier-plugin-nunjucks"],
   overrides: [
     {
-      files: ["**/*.{njk,nunjucks}"],
+      files: ["**/*.{njk,nunjucks,nunj}"],
       options: {
         parser: "nunjucks",
         printWidth: 100,
@@ -114,7 +114,7 @@ module.exports = {
   plugins: ["../prettier-plugin-nunjucks/dist/plugin.js"],
   overrides: [
     {
-      files: ["**/*.{njk,nunjucks}"],
+      files: ["**/*.{njk,nunjucks,nunj}"],
       options: {
         parser: "nunjucks",
       },
@@ -123,18 +123,59 @@ module.exports = {
 };
 ```
 
+### Custom extension tags
+
+Nunjucks extensions can define project-specific tags. Unknown single statement tags are preserved by default; tags that behave like blocks or branches can be configured explicitly.
+
+```js
+/** @type {import("prettier").Config} */
+module.exports = {
+  plugins: ["prettier-plugin-nunjucks"],
+  overrides: [
+    {
+      files: ["**/*.{njk,nunjucks,nunj}"],
+      options: {
+        parser: "nunjucks",
+        blockTags: ["remote"],
+        forkTags: ["error"],
+      },
+    },
+  ],
+};
+```
+
+Input:
+
+```njk
+{% remote "/stuff" %}
+  This content will be replaced with the content from /stuff
+      {% error %}
+            There was an error fetching /stuff
+          {% endremote %}
+```
+
+Output:
+
+```njk
+{% remote "/stuff" %}
+  This content will be replaced with the content from /stuff
+{% error %}
+  There was an error fetching /stuff
+{% endremote %}
+```
+
 ## CLI
 
 Published package:
 
 ```bash
-npx prettier --write "src/**/*.{njk,nunjucks}" --plugin prettier-plugin-nunjucks --parser nunjucks
+npx prettier --write "src/**/*.{njk,nunjucks,nunj}" --plugin prettier-plugin-nunjucks --parser nunjucks
 ```
 
 Local plugin build:
 
 ```bash
-npx prettier --write "src/**/*.{njk,nunjucks}" --plugin ../prettier-plugin-nunjucks/dist/plugin.js --parser nunjucks
+npx prettier --write "src/**/*.{njk,nunjucks,nunj}" --plugin ../prettier-plugin-nunjucks/dist/plugin.js --parser nunjucks
 ```
 
 ## API
@@ -172,6 +213,7 @@ async function run(source) {
 - multiline class formatting with conditional modifiers and whitespace-control blocks
 - embedded JavaScript / CSS formatting for plain `script` / `style` tags when the content is safe to parse
 - raw `script` / `style` preservation when content contains Nunjucks or non-JS/CSS types
+- custom extension block/fork tags via `blockTags`, `inlineTags`, and `forkTags`
 - incomplete/unmatched template structures preserved as raw nodes instead of crashing
 
 ## Real-World Examples

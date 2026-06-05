@@ -1,7 +1,7 @@
 {
   "name": "prettier-plugin-nunjucks",
-  "version": "0.1.1",
-  "description": "Prettier plugin for Nunjucks templates (.njk)",
+  "version": "0.1.2",
+  "description": "Prettier plugin for Nunjucks templates (.njk, .nunjucks, .nunj)",
   "license": "MIT",
   "type": "commonjs",
   "main": "./dist/plugin.js",
