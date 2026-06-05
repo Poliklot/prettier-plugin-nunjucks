@@ -1,0 +1,2498 @@
+import type { AstPath, Doc, Options, ParserOptions, Printer } from 'prettier';
+import { builders, utils } from 'prettier/doc';
+import {
+  AttributeValue,
+  BlockStatement,
+  CommentStatement,
+  DecoratorStatement,
+  ElementAttribute,
+  ElementNode,
+  ElseBranch,
+  HashPair,
+  MustacheStatement,
+  Node,
+  PartialStatement,
+  Program,
+  TextNode,
+  UnmatchedNode,
+} from './types';
+import {
+  inlineContentElements,
+  trimmableRawTextElements as trimmableRawTextTags,
+  voidElements as voidTags,
+  whitespaceSensitiveRawTextElements as whitespaceSensitiveRawTextTags,
+} from 'template-format-core';
+import { normalizeInlineText, stripCommonIndent, trimSurroundingBlankLines } from 'template-format-core';
+import { nunjucksDialect } from './dialects/nunjucks/tokens';
+
+const { hardline, join, group, indent, align, line, softline, ifBreak, lineSuffix, lineSuffixBoundary } = builders;
+const { stripTrailingHardline, willBreak } = utils;
+const mapDoc = (utils as unknown as { mapDoc: (doc: Doc, cb: (doc: Doc) => Doc) => Doc }).mapDoc;
+const concat = (builders as unknown as { concat: (parts: Doc[]) => Doc }).concat;
+const templateDialect = nunjucksDialect;
+type PrintableExpression = MustacheStatement | BlockStatement | ElseBranch | PartialStatement | DecoratorStatement;
+type CallableStatement = MustacheStatement | DecoratorStatement;
+
+interface CallablePrintConfig {
+  open: string;
+  close: string;
+  inlineContent: string;
+  multilineHead: string;
+  openPadding?: string;
+  closePadding: string;
+  multiline: boolean;
+}
+
+function docHasHardline(doc: Doc): boolean {
+  if (typeof doc === 'string') {
+    return doc.includes('\n');
+  }
+
+  if (typeof doc === 'number' || doc === null || doc === undefined) {
+    return false;
+  }
+
+  if (doc === hardline) {
+    return true;
+  }
+
+  if (Array.isArray(doc)) {
+    return doc.some(docHasHardline);
+  }
+
+  if (typeof doc === 'object' && 'contents' in doc) {
+    return docHasHardline((doc as { contents: Doc }).contents);
+  }
+
+  if (typeof doc === 'object' && 'parts' in doc) {
+    return docHasHardline((doc as { parts: Doc[] }).parts);
+  }
+
+  return false;
+}
+
+function docBreaks(doc: Doc): boolean {
+  if (Array.isArray(doc)) {
+    return doc.some(docBreaks);
+  }
+
+  if (typeof doc === 'object' && doc !== null && 'contents' in doc) {
+    return docBreaks((doc as { contents: Doc }).contents);
+  }
+
+  if (typeof doc === 'object' && doc !== null && 'parts' in doc) {
+    return docBreaks((doc as { parts: Doc[] }).parts);
+  }
+
+  return docHasHardline(doc) || willBreak(doc);
+}
+
+function getTrimOpen(node: PrintableExpression): string {
+  return node.trimOpen ? '-' : '';
+}
+
+function getTrimClose(node: PrintableExpression): string {
+  return node.trimClose ? '-' : '';
+}
+
+function getTemplateTagDelimiters(triple = false): { open: string; close: string } {
+  return templateDialect.getTagDelimiters(triple);
+}
+
+function buildTemplateTag(content: string, trimOpen = '', trimClose = '', triple = true): string {
+  const { open, close } = getTemplateTagDelimiters(triple);
+  const openPadding = content.length > 0 ? ' ' : '';
+  const closePadding = content.length > 0 ? ' ' : '';
+  return `${open}${trimOpen}${openPadding}${content}${closePadding}${trimClose}${close}`;
+}
+
+function isSimpleValueMustache(node: MustacheStatement): boolean {
+  return node.params.length === 0 && node.hash.length === 0 && (!node.blockParams || node.blockParams.length === 0);
+}
+
+function getMustacheOpenPadding(_node: MustacheStatement, content: string): string {
+  return content.length > 0 ? ' ' : '';
+}
+
+function getMustacheClosePadding(_node: MustacheStatement, content: string): string {
+  return content.length > 0 ? ' ' : '';
+}
+
+function getTrimClosePadding(_node: BlockStatement | ElseBranch | PartialStatement | DecoratorStatement, content: string): string {
+  return content.length > 0 ? ' ' : '';
+}
+
+function shouldKeepParamInline(param: string): boolean {
+  return param.includes('\n') || /^\(parseJSON\s+['"`]/.test(param.trim());
+}
+
+function getBlockPrefix(node: BlockStatement): '#' | '#>' | '#*' | '^' | '<' | '$' {
+  return node.blockPrefix ?? '#';
+}
+
+function hasInlineBoundaryWhitespace(value: string | undefined): boolean {
+  return typeof value === 'string' && /\s/.test(value);
+}
+
+function isPunctuationOnlyTextNode(node: Node | undefined): boolean {
+  return node?.type === 'TextNode' && /^[.,:;!?+"'«»+]+$/.test((node as TextNode).value);
+}
+
+function isPlainAttribute(attr: ElementAttribute): attr is Extract<ElementAttribute, { type: 'Attribute' }> {
+  return attr.type === 'Attribute';
+}
+
+function isRawAttribute(attr: ElementAttribute): attr is Extract<ElementAttribute, { type: 'RawAttribute' }> {
+  return attr.type === 'RawAttribute';
+}
+
+function getMaxEmptyLines(options: ParserOptions): number {
+  const rawValue = (options as unknown as Record<string, unknown>).maxEmptyLines;
+  if (typeof rawValue === 'number' && rawValue >= 0) {
+    return rawValue;
+  }
+
+  return 1;
+}
+
+export const printer: Printer<Node> = {
+  getVisitorKeys(node, nonTraversableKeys) {
+    return getHandlebarsVisitorKeys(node, nonTraversableKeys);
+  },
+  hasPrettierIgnore(path) {
+    const node = path.getValue() as Node | null;
+    return node?.type === 'CommentStatement' && hasCommentDirective(node as CommentStatement, 'prettier-ignore');
+  },
+  canAttachComment(node) {
+    return node.type !== 'CommentStatement' && node.type !== 'UnmatchedNode';
+  },
+  isBlockComment(node) {
+    return node.type === 'CommentStatement' && ((node as CommentStatement).block || (node as CommentStatement).multiline);
+  },
+  willPrintOwnComments(path) {
+    return (path.getValue() as Node | null)?.type === 'CommentStatement';
+  },
+  printComment(path, options) {
+    return printCommentStatement(path.getValue() as CommentStatement, options);
+  },
+  getCommentChildNodes(node) {
+    return getCommentChildNodes(node);
+  },
+  embed(path, options) {
+    const node = path.getValue() as Node;
+    if (node.type !== 'TextNode') {
+      return null;
+    }
+
+    const parentNode = path.getParentNode() as Node | null;
+    if (parentNode?.type !== 'ElementNode') {
+      return null;
+    }
+
+    const parser = getEmbeddedRawTextParser(parentNode as ElementNode, node as TextNode, options);
+    if (!parser) {
+      return null;
+    }
+
+    return async (textToDoc) => {
+      const content = normalizeEmbeddedRawText((node as TextNode).value);
+      if (content.trim() === '') {
+        return '';
+      }
+
+      const prepared = prepareEmbeddedRawText(content, parser);
+      if (!prepared) {
+        return formatVerbatimText(content);
+      }
+
+      try {
+        const doc = await textToDoc(prepared.text, {
+          ...options,
+          parser,
+        });
+
+        return stripTrailingHardline(restoreHandlebarsPlaceholders(doc, prepared.replacements));
+      } catch {
+        return formatVerbatimText(content);
+      }
+    };
+  },
+  print(path, options, print) {
+    const node = path.getValue() as Node;
+
+    switch (node.type) {
+      case 'Program':
+        return printProgram(path as AstPath<Program>, options, print);
+      case 'ElementNode':
+        return printElement(path as AstPath<ElementNode>, options, print);
+      case 'TextNode':
+        if (node.verbatim) {
+          if (node.preserveWhitespace) {
+            return node.value;
+          }
+
+          const parentNode = path.getParentNode() as Node | null;
+          const value = shouldTrimRawTextBoundaryWhitespace(parentNode, node)
+            ? trimRawTextBoundaryWhitespace(node.value)
+            : node.value;
+          return formatVerbatimText(value);
+        }
+
+        if (node.blankLines) {
+          const maxEmptyLines = getMaxEmptyLines(options);
+          const allowedBlankLines = Math.min(node.blankLines, maxEmptyLines);
+          const extraHardlines = allowedBlankLines - 1;
+          return extraHardlines > 0 ? concat(new Array(extraHardlines).fill(hardline)) : '';
+        }
+        return node.value.replace(/\s+/g, ' ').trim();
+      case 'MustacheStatement':
+        return printMustache(node, options);
+      case 'DecoratorStatement':
+        return printDecorator(node as DecoratorStatement, options);
+      case 'BlockStatement':
+        return printBlock(path as AstPath<BlockStatement>, options, print);
+      case 'PartialStatement':
+        return printPartial(node, options);
+      case 'CommentStatement':
+        return printCommentStatement(node as CommentStatement, options);
+      case 'UnmatchedNode':
+        return (node as UnmatchedNode).raw;
+      default:
+        return '';
+    }
+  },
+};
+
+function getHandlebarsVisitorKeys(node: unknown, nonTraversableKeys: Set<string>): string[] {
+  const type = (node as { type?: string } | null)?.type;
+  return getNodeVisitorKeys(type).filter((key) => !nonTraversableKeys.has(key));
+}
+
+function getNodeVisitorKeys(type: string | undefined): string[] {
+  switch (type) {
+    case 'Program':
+      return ['body'];
+    case 'ElementNode':
+      return ['attributes', 'children'];
+    case 'Attribute':
+      return ['value'];
+    case 'AttributeValue':
+      return ['parts'];
+    case 'AttributeBlock':
+      return ['block'];
+    case 'BlockStatement':
+      return ['program', 'inverseChain', 'inverse'];
+    case 'ElseBranch':
+      return ['program'];
+    default:
+      return [];
+  }
+}
+
+function getCommentChildNodes(node: Node): Node[] | undefined {
+  switch (node.type) {
+    case 'Program':
+      return (node as Program).body;
+    case 'ElementNode': {
+      const element = node as ElementNode;
+      const attributeNodes = element.attributes.flatMap((attr) => {
+        if (attr.type === 'AttributeBlock') {
+          return [attr.block as Node];
+        }
+
+        if (attr.type === 'Attribute' && attr.value) {
+          return attr.value.parts as Node[];
+        }
+
+        return [];
+      });
+
+      return [...attributeNodes, ...(element.children as Node[])];
+    }
+    case 'BlockStatement': {
+      const block = node as BlockStatement;
+      return [
+        ...(block.program.body as Node[]),
+        ...((block.inverseChain ?? []).flatMap((branch) => branch.program.body) as Node[]),
+        ...(block.inverse.body as Node[]),
+      ];
+    }
+    default:
+      return [];
+  }
+}
+
+function hasCommentDirective(node: CommentStatement, directive: string): boolean {
+  return node.value.toLowerCase().includes(directive);
+}
+
+function printCommentStatement(node: CommentStatement, options: ParserOptions): Doc {
+  if (node.multiline) {
+    return formatMultilineComment(node.value, options, node.inline);
+  }
+
+  if (!node.block && node.value.startsWith('<')) {
+    return templateDialect.getLineCommentTag(node.value);
+  }
+
+  if (node.block) {
+    const trimmedValue = typeof node.value === 'string' ? node.value.replace(/[ \t]+$/gm, '') : node.value;
+    return templateDialect.getBlockCommentTag(trimmedValue);
+  }
+
+  return templateDialect.getLineCommentTag(node.value);
+}
+
+function formatVerbatimText(content: string): Doc {
+  const withoutLeadingNewline = content.startsWith('\n') ? content.slice(1) : content;
+  const withoutTrailingNewline = withoutLeadingNewline.endsWith('\n')
+    ? withoutLeadingNewline.slice(0, -1)
+    : withoutLeadingNewline;
+
+  if (withoutTrailingNewline.trimStart().startsWith('<!--')) {
+    return withoutTrailingNewline;
+  }
+
+  const lines = withoutTrailingNewline.split('\n');
+  const commonIndent = lines.reduce((min, line) => {
+    if (line.trim() === '') return min;
+    const indentLength = (line.match(/^[ \t]*/) || [''])[0].length;
+    return Math.min(min, indentLength);
+  }, Number.MAX_SAFE_INTEGER);
+
+  const normalizedIndent = Number.isFinite(commonIndent) ? commonIndent : 0;
+  let normalizedLines = lines.map((line) => {
+    const indentLength = (line.match(/^[ \t]*/) || [''])[0].length;
+    return line.slice(Math.min(indentLength, normalizedIndent));
+  });
+
+  while (normalizedLines.length > 0 && normalizedLines[0].trim() === '') {
+    normalizedLines = normalizedLines.slice(1);
+  }
+
+  while (normalizedLines.length > 0 && normalizedLines[normalizedLines.length - 1].trim() === '') {
+    normalizedLines = normalizedLines.slice(0, -1);
+  }
+
+  if (normalizedLines.length === 0) {
+    return '';
+  }
+
+  const docs: Doc[] = [];
+
+  normalizedLines.forEach((lineText, index) => {
+    const trailingWhitespaceMatch = lineText.match(/(\s+)$/);
+    const trailingWhitespace = trailingWhitespaceMatch?.[1] ?? '';
+    const contentWithoutTrailing = trailingWhitespace ? lineText.slice(0, -trailingWhitespace.length) : lineText;
+
+    docs.push(contentWithoutTrailing);
+    if (trailingWhitespace) {
+      docs.push(lineSuffix(trailingWhitespace));
+      docs.push(lineSuffixBoundary);
+    }
+
+    if (index < normalizedLines.length - 1) {
+      docs.push(hardline);
+    }
+  });
+
+  return concat(docs);
+}
+
+function shouldTrimRawTextBoundaryWhitespace(parentNode: Node | null, node: TextNode): boolean {
+  return (
+    parentNode?.type === 'ElementNode' &&
+    trimmableRawTextTags.has((parentNode as ElementNode).tag.toLowerCase()) &&
+    node.verbatim === true &&
+    node.preserveWhitespace !== true
+  );
+}
+
+function trimRawTextBoundaryWhitespace(value: string): string {
+  return value.replace(/[ \t]+$/, '');
+}
+
+type EmbeddedRawTextParser = 'babel' | 'css';
+
+interface PreparedEmbeddedRawText {
+  text: string;
+  replacements: Map<string, string>;
+}
+
+function getEmbeddedRawTextParser(
+  element: ElementNode,
+  child: TextNode,
+  options: Options | ParserOptions,
+): EmbeddedRawTextParser | null {
+  if (!isEmbeddedLanguageFormattingEnabled(options) || !isSingleRawTextChild(element, child)) {
+    return null;
+  }
+
+  const tag = element.tag.toLowerCase();
+  const content = normalizeEmbeddedRawText(child.value);
+  let parser: EmbeddedRawTextParser | null = null;
+
+  if (tag === 'style') {
+    const type = getStaticAttributeValue(element, 'type');
+    parser = !type || type === 'text/css' ? 'css' : null;
+  } else if (tag === 'script') {
+    if (hasPlainAttribute(element, 'src')) {
+      return null;
+    }
+
+    const type = getStaticAttributeValue(element, 'type');
+    parser = isJavaScriptScriptType(type) ? 'babel' : null;
+  }
+
+  if (!parser || !canFormatEmbeddedRawText(content, tag, parser)) {
+    return null;
+  }
+
+  return parser;
+}
+
+function isEmbeddedLanguageFormattingEnabled(options: Options | ParserOptions): boolean {
+  return (options as { embeddedLanguageFormatting?: string }).embeddedLanguageFormatting !== 'off';
+}
+
+function isSingleRawTextChild(element: ElementNode, child: TextNode): boolean {
+  return (
+    trimmableRawTextTags.has(element.tag.toLowerCase()) &&
+    element.children.length === 1 &&
+    element.children[0] === child &&
+    child.verbatim === true
+  );
+}
+
+function canFormatEmbeddedRawText(content: string, tag: string, parser: EmbeddedRawTextParser): boolean {
+  return (
+    content.trim() !== '' &&
+    !new RegExp(`</\\s*${tag}`, 'i').test(content) &&
+    !(tag === 'style' && hasMultilineBlockComment(content)) &&
+    prepareEmbeddedRawText(content, parser) !== null
+  );
+}
+
+function prepareEmbeddedRawText(content: string, parser: EmbeddedRawTextParser): PreparedEmbeddedRawText | null {
+  const tokens = findEmbeddedHandlebarsTokens(content);
+  if (tokens.length === 0) {
+    return { text: content, replacements: new Map() };
+  }
+
+  if (tokens.some((token) => isUnsafeEmbeddedHandlebarsToken(content, token))) {
+    return null;
+  }
+
+  const replacements = new Map<string, string>();
+  let prepared = '';
+  let lastIndex = 0;
+
+  tokens.forEach((token, index) => {
+    const placeholder = parser === 'css' ? `poliklot-hbs-placeholder-${index}` : `__POLIKLOT_HBS_PLACEHOLDER_${index}__`;
+    prepared += content.slice(lastIndex, token.start);
+    prepared += placeholder;
+    replacements.set(placeholder, content.slice(token.start, token.end));
+    lastIndex = token.end;
+  });
+
+  prepared += content.slice(lastIndex);
+
+  return { text: prepared, replacements };
+}
+
+function restoreHandlebarsPlaceholders(doc: Doc, replacements: Map<string, string>): Doc {
+  if (replacements.size === 0) {
+    return doc;
+  }
+
+  const placeholders = [...replacements.keys()].sort((left, right) => right.length - left.length);
+
+  return mapDoc(doc, (currentDoc) => {
+    if (typeof currentDoc !== 'string') {
+      return currentDoc;
+    }
+
+    return placeholders.reduce((value, placeholder) => {
+      const replacement = replacements.get(placeholder) ?? placeholder;
+      return value.split(placeholder).join(replacement);
+    }, currentDoc);
+  });
+}
+
+interface EmbeddedHandlebarsToken {
+  start: number;
+  end: number;
+}
+
+function findEmbeddedHandlebarsTokens(content: string): EmbeddedHandlebarsToken[] {
+  const tokens: EmbeddedHandlebarsToken[] = [];
+  let position = 0;
+
+  while (position < content.length) {
+    const start = content.indexOf('{{', position);
+    if (start === -1) {
+      break;
+    }
+
+    if (isEscapedEmbeddedHandlebarsOpen(content, start)) {
+      position = start + 2;
+      continue;
+    }
+
+    if (content.startsWith('{{{{', start)) {
+      const close = content.indexOf('}}}}', start + 4);
+      if (close === -1) {
+        return [{ start, end: content.length }];
+      }
+
+      tokens.push({ start, end: close + 4 });
+      position = close + 4;
+      continue;
+    }
+
+    const triple = content.startsWith('{{{', start);
+    const closeDelimiter = triple ? '}}}' : '}}';
+    const close = content.indexOf(closeDelimiter, start + (triple ? 3 : 2));
+    if (close === -1) {
+      return [{ start, end: content.length }];
+    }
+
+    tokens.push({ start, end: close + closeDelimiter.length });
+    position = close + closeDelimiter.length;
+  }
+
+  return tokens;
+}
+
+function isEscapedEmbeddedHandlebarsOpen(content: string, position: number): boolean {
+  let slashCount = 0;
+  for (let index = position - 1; index >= 0 && content[index] === '\\'; index -= 1) {
+    slashCount += 1;
+  }
+
+  return slashCount % 2 === 1;
+}
+
+function isUnsafeEmbeddedHandlebarsToken(content: string, token: EmbeddedHandlebarsToken): boolean {
+  const raw = content.slice(token.start, token.end);
+  if (raw.startsWith('{{{{')) {
+    return true;
+  }
+
+  const triple = raw.startsWith('{{{');
+  if ((triple && !raw.endsWith('}}}')) || (!triple && !raw.endsWith('}}'))) {
+    return true;
+  }
+
+  const openLength = triple ? 3 : 2;
+  const closeLength = triple ? 3 : 2;
+  const inner = raw.slice(openLength, -closeLength).trim().replace(/^~/, '').replace(/~$/, '').trim();
+
+  return (
+    inner === '' ||
+    inner === 'else' ||
+    inner.startsWith('else ') ||
+    /^[#/!>*<$]/.test(inner) ||
+    isStandaloneEmbeddedHandlebarsToken(content, token)
+  );
+}
+
+function isStandaloneEmbeddedHandlebarsToken(content: string, token: EmbeddedHandlebarsToken): boolean {
+  const lineStart = content.lastIndexOf('\n', token.start - 1) + 1;
+  const nextLineBreak = content.indexOf('\n', token.end);
+  const lineEnd = nextLineBreak === -1 ? content.length : nextLineBreak;
+
+  return content.slice(lineStart, token.start).trim() === '' && content.slice(token.end, lineEnd).trim() === '';
+}
+
+function hasMultilineBlockComment(content: string): boolean {
+  return /\/\*[\s\S]*?\n[\s\S]*?\*\//.test(content);
+}
+
+function getStaticAttributeValue(element: ElementNode, name: string): string | null {
+  const attr = element.attributes.find(
+    (candidate) => candidate.type === 'Attribute' && candidate.name.toLowerCase() === name,
+  );
+
+  if (!attr || attr.type !== 'Attribute') {
+    return null;
+  }
+
+  if (!attr.value) {
+    return '';
+  }
+
+  if (!attr.value.parts.every((part) => part.type === 'TextNode')) {
+    return null;
+  }
+
+  return attr.value.parts.map((part) => (part as TextNode).value).join('').trim().toLowerCase();
+}
+
+function hasPlainAttribute(element: ElementNode, name: string): boolean {
+  return element.attributes.some((attr) => attr.type === 'Attribute' && attr.name.toLowerCase() === name);
+}
+
+function isJavaScriptScriptType(type: string | null): boolean {
+  return (
+    !type ||
+    type === 'module' ||
+    type === 'text/javascript' ||
+    type === 'application/javascript' ||
+    type === 'text/ecmascript' ||
+    type === 'application/ecmascript'
+  );
+}
+
+function normalizeEmbeddedRawText(content: string): string {
+  const lines = trimSurroundingBlankLines(content.replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').split('\n'));
+  return stripCommonIndent(lines).join('\n');
+}
+
+function printProgram(path: AstPath<Program>, options: ParserOptions, print: (path: AstPath) => Doc): Doc {
+  const parts: Doc[] = [];
+  const nodes: Node[] = [];
+  const isRootProgram = !path.getParentNode();
+  let rootFragmentDepth = 0;
+
+  path.each((childPath) => {
+    const childNode = childPath.getValue() as Node;
+    if (childNode.type === 'TextNode' && childNode.blankLines && getMaxEmptyLines(options) === 0) {
+      return;
+    }
+
+    const closingTagName = getHtmlClosingTagName(childNode);
+    if (closingTagName && closingTagName !== 'html') {
+      rootFragmentDepth = Math.max(rootFragmentDepth - 1, 0);
+    }
+
+    let doc = print(childPath as AstPath<Node>);
+    if (doc === null) {
+      return;
+    }
+
+    if (isRootProgram && rootFragmentDepth > 0) {
+      doc = applyRootFragmentIndent(doc, rootFragmentDepth, options);
+    } else if (isRootProgram && shouldPreserveRootClosingTagIndent(childNode)) {
+      const standaloneIndent = getOriginalStandaloneIndent(childNode, options);
+      if (standaloneIndent) {
+        doc = concat([standaloneIndent, doc]);
+      }
+    } else if (isRootProgram && shouldPreserveRootHandlebarsIndent(childNode)) {
+      const standaloneIndent = getOriginalStandaloneIndent(childNode, options);
+      if (standaloneIndent && !docBreaks(doc)) {
+        doc = concat([standaloneIndent, doc]);
+      }
+    }
+
+    nodes.push(childNode);
+    parts.push(doc);
+
+    const openingTagName = getHtmlOpeningTagName(childNode);
+    if (
+      openingTagName &&
+      openingTagName !== 'html' &&
+      !voidTags.has(openingTagName) &&
+      (rootFragmentDepth > 0 || openingTagName === 'head' || openingTagName === 'body')
+    ) {
+      rootFragmentDepth += 1;
+    }
+  }, 'body');
+
+  if (parts.length === 0) {
+    return '';
+  }
+
+  while (parts.length > 0 && parts[0] === '' && nodes[0]?.type === 'TextNode' && (nodes[0] as TextNode).blankLines) {
+    parts.shift();
+    nodes.shift();
+  }
+
+  while (
+    parts.length > 0 &&
+    parts[parts.length - 1] === '' &&
+    nodes[nodes.length - 1]?.type === 'TextNode' &&
+    (nodes[nodes.length - 1] as TextNode).blankLines
+  ) {
+    parts.pop();
+    nodes.pop();
+  }
+
+  if (parts.length === 0) {
+    return '';
+  }
+
+  const lastNode = nodes[nodes.length - 1];
+  const lastPart = parts[parts.length - 1];
+
+  if (lastNode?.type === 'UnmatchedNode' && typeof lastPart === 'string') {
+    parts[parts.length - 1] = lastPart.replace(/\n+$/, '');
+  }
+
+  if (canPrintRootInlineTextTemplate(nodes, options)) {
+    return concat([stringifyInlineChildren(nodes, options), hardline]);
+  }
+
+  return concat([join(hardline, parts), hardline]);
+}
+
+function getOriginalStandaloneIndent(node: Node, options: ParserOptions): string {
+  const range = (node as { range?: [number, number] }).range;
+  const originalText = (options as { originalText?: string }).originalText;
+  if (!range || !originalText) {
+    return '';
+  }
+
+  const nodeText = originalText.slice(range[0], range[1]);
+  const nodeSpansMultipleLines = /[\r\n]/.test(nodeText);
+  if (nodeSpansMultipleLines && node.type !== 'ElementNode') {
+    return '';
+  }
+
+  const lineStart = originalText.lastIndexOf('\n', range[0] - 1) + 1;
+  const before = originalText.slice(lineStart, range[0]);
+  if (!/^[ \t]+$/.test(before)) {
+    return '';
+  }
+
+  if (!nodeSpansMultipleLines) {
+    const nextLineBreak = originalText.indexOf('\n', range[1]);
+    const lineEnd = nextLineBreak === -1 ? originalText.length : nextLineBreak;
+    const after = originalText.slice(range[1], lineEnd);
+    if (!/^[ \t\r]*$/.test(after)) {
+      return '';
+    }
+  }
+
+  return before;
+}
+
+function applyRootFragmentIndent(doc: Doc, depth: number, options: ParserOptions): Doc {
+  const prefix = getIndentUnit(options).repeat(depth);
+  return prefix ? concat([prefix, align(prefix, doc)]) : doc;
+}
+
+function shouldPreserveRootClosingTagIndent(node: Node): boolean {
+  return Boolean(getHtmlClosingTagName(node));
+}
+
+function shouldPreserveRootHandlebarsIndent(node: Node): boolean {
+  return (
+    node.type === 'MustacheStatement' ||
+    node.type === 'PartialStatement' ||
+    node.type === 'DecoratorStatement' ||
+    node.type === 'BlockStatement'
+  );
+}
+
+function getUnmatchedRaw(node: Node): string {
+  return node.type === 'UnmatchedNode' ? ((node as UnmatchedNode).raw ?? '').trim() : '';
+}
+
+function getTextValue(node: Node): string {
+  return node.type === 'TextNode' ? ((node as TextNode).value ?? '').trim() : '';
+}
+
+function getHtmlOpeningTagName(node: Node): string | null {
+  const raw = getUnmatchedRaw(node);
+  const match = raw.match(/^<([A-Za-z][\w:-]*)(?:\s|>|\/>)/u);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function getHtmlClosingTagName(node: Node): string | null {
+  const value = getUnmatchedRaw(node) || getTextValue(node);
+  const match = value.match(/^<\/([A-Za-z][\w:-]*)\s*>$/u);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function canPrintRootInlineTextTemplate(nodes: Node[], options: ParserOptions): boolean {
+  return (
+    nodes.some((node) => node.type === 'TextNode') &&
+    nodes.every((node, index) => isRootInlineTextTemplateChild(node, index, nodes, options))
+  );
+}
+
+function isRootInlineTextTemplateChild(node: Node, index: number, nodes: Node[], options: ParserOptions): boolean {
+  if (node.type === 'MustacheStatement' || node.type === 'PartialStatement' || node.type === 'DecoratorStatement') {
+    return true;
+  }
+
+  if (node.type === 'BlockStatement') {
+    return canInlineBlock(node as BlockStatement, options, 'Program');
+  }
+
+  if (node.type === 'CommentStatement') {
+    const comment = node as CommentStatement;
+    return !comment.block && !comment.multiline;
+  }
+
+  if (node.type !== 'TextNode') {
+    return false;
+  }
+
+  const text = node as TextNode;
+  if (text.verbatim || text.blankLines || /[\r\n]/.test(text.value) || hasLineBreak(text.leadingWhitespace)) {
+    return false;
+  }
+
+  return !hasLineBreak(text.trailingWhitespace) || index === nodes.length - 1;
+}
+
+function hasLineBreak(value: string | undefined): boolean {
+  return typeof value === 'string' && /[\r\n]/.test(value);
+}
+
+function sortAttributes(attributes: ElementAttribute[], options: ParserOptions): ElementAttribute[] {
+  const sorted: ElementAttribute[] = [];
+  let buffer: ElementAttribute[] = [];
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    sorted.push(...sortPlainAttributes(buffer, options));
+    buffer = [];
+  };
+
+  attributes.forEach((attr) => {
+    if (!isPlainAttribute(attr)) {
+      flush();
+      sorted.push(attr);
+      return;
+    }
+
+    buffer.push(attr);
+  });
+
+  flush();
+
+  return sorted;
+}
+
+function sortPlainAttributes(attributes: ElementAttribute[], options: ParserOptions): ElementAttribute[] {
+  const plainAttributes = attributes.filter(isPlainAttribute);
+  const others = plainAttributes.filter((attr) => attr.name !== 'id' && attr.name !== 'class');
+  const idAttr = plainAttributes.find((attr) => attr.name === 'id');
+  const classAttr = plainAttributes.find((attr) => attr.name === 'class');
+  const ordered: ElementAttribute[] = [];
+  if (idAttr) ordered.push(idAttr);
+  if (classAttr) ordered.push(classAttr);
+
+  const preferredDataOrder: string[] = (options as unknown as Record<string, unknown>).dataAttributeOrder as string[];
+  const dataOrder = Array.isArray(preferredDataOrder) ? preferredDataOrder : [];
+
+  if (dataOrder.length === 0) {
+    return ordered.concat(others);
+  }
+
+  const orderMap = new Map(dataOrder.map((name, index) => [name, index]));
+
+  const nonDataAttrs = others.filter((attr) => !attr.name.startsWith('data-'));
+  const dataAttrs = others.filter((attr) => attr.name.startsWith('data-'));
+
+  const sortedData = dataAttrs.slice().sort((a, b) => {
+    const aRank = orderMap.has(a.name) ? (orderMap.get(a.name) as number) : Number.MAX_SAFE_INTEGER;
+    const bRank = orderMap.has(b.name) ? (orderMap.get(b.name) as number) : Number.MAX_SAFE_INTEGER;
+
+    if (aRank !== bRank) return aRank - bRank;
+    return attributes.indexOf(a) - attributes.indexOf(b);
+  });
+
+  return ordered.concat(nonDataAttrs).concat(sortedData);
+}
+
+function getPrintWidth(options: ParserOptions): number {
+  return typeof options.printWidth === 'number' && options.printWidth > 0 ? options.printWidth : 80;
+}
+
+function getIndentWidth(options: ParserOptions): number {
+  return typeof options.tabWidth === 'number' && Number.isFinite(options.tabWidth) && options.tabWidth > 0
+    ? options.tabWidth
+    : 2;
+}
+
+function getIndentUnit(options: ParserOptions): string {
+  const useTabs = (options as unknown as Record<string, unknown>).useTabs === true;
+  const tabWidth = getIndentWidth(options);
+
+  return useTabs ? '\t' : ' '.repeat(tabWidth);
+}
+
+function splitMultilineExpression(content: string): string[] | null {
+  if (!content.includes('\n')) {
+    return null;
+  }
+
+  const lines = trimSurroundingBlankLines(content.replace(/[ \t]+$/gm, '').split('\n'));
+
+  if (lines.length <= 1) {
+    return null;
+  }
+
+  return stripCommonIndent(lines, 1);
+}
+
+function isStructuralCloseLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.length > 0 && /^[\]})'"`]+$/.test(trimmed);
+}
+
+function formatMultilineParamRest(rest: string[], options: ParserOptions): string[] {
+  if (rest.length === 0) {
+    return [];
+  }
+
+  const lastLine = rest[rest.length - 1];
+  const hasTrailingCloseLine = isStructuralCloseLine(lastLine);
+  const bodyLines = hasTrailingCloseLine ? rest.slice(0, -1) : rest;
+  const indentUnit = getIndentUnit(options);
+  const normalizedBodyLines = stripCommonIndent(bodyLines).map((line) =>
+    line.trim() === '' ? '' : `${indentUnit}${line}`,
+  );
+  const normalizedCloseLine = hasTrailingCloseLine ? lastLine.trim() : null;
+
+  return normalizedCloseLine ? [...normalizedBodyLines, normalizedCloseLine] : normalizedBodyLines;
+}
+
+function getEstimatedIndentLength(path: AstPath<Node>, options: ParserOptions): number {
+  let depth = 0;
+
+  for (let ancestorDepth = 0; ; ancestorDepth += 1) {
+    const ancestor = path.getParentNode(ancestorDepth) as Node | undefined;
+    if (!ancestor) {
+      break;
+    }
+
+    if (ancestor.type === 'ElementNode' || ancestor.type === 'BlockStatement') {
+      depth += 1;
+    }
+  }
+
+  return depth * getIndentWidth(options);
+}
+
+function buildAttributeDocs(attributes: ElementAttribute[], options: ParserOptions): Doc[] {
+  const docs: Doc[] = [];
+  attributes.forEach((attr) => {
+    docs.push(printAttribute(attr, options));
+  });
+
+  return docs;
+}
+
+function shouldBreakAttribute(attr: ElementAttribute): boolean {
+  if (isRawAttribute(attr)) {
+    return /\n/.test(attr.raw);
+  }
+
+  if (!isPlainAttribute(attr)) {
+    return true;
+  }
+
+  if (!attr.value) {
+    return false;
+  }
+
+  if (attr.value.parts.some((part) => part.type === 'BlockStatement' || part.type === 'CommentStatement')) {
+    return true;
+  }
+
+  const hasNewlineText = attr.value.parts.some((part) => part.type === 'TextNode' && /\n/.test(part.value));
+  if (hasNewlineText) {
+    return true;
+  }
+
+  return false;
+}
+
+function printElement(path: AstPath<ElementNode>, options: ParserOptions, print: (path: AstPath) => Doc): Doc {
+  const node = path.getValue();
+  const sortedAttributes = sortAttributes(node.attributes, options);
+  const attrsDocs = buildAttributeDocs(sortedAttributes, options);
+  const breakAttrs =
+    sortedAttributes.some((attr) => shouldBreakAttribute(attr)) || attrsDocs.some(docHasHardline);
+  const parentNode = path.getParentNode();
+  const grandParentNode = path.getParentNode(1);
+  const ancestors: Array<Node | null | undefined> = [
+    parentNode as Node | null | undefined,
+    grandParentNode as Node | null | undefined,
+  ];
+  const currentIndentLength = getEstimatedIndentLength(path as AstPath<Node>, options);
+
+  const openTag = concat(['<', node.tag]);
+  let attributesDoc: Doc = '';
+
+  if (sortedAttributes.length > 0) {
+    if (breakAttrs) {
+      attributesDoc = concat([
+        indent(concat([hardline, join(hardline, attrsDocs)])),
+        hardline,
+      ]);
+    } else {
+      attributesDoc = node.selfClosing
+        ? concat([indent(concat([line, join(line, attrsDocs)])), softline])
+        : concat([
+            group(indent(concat([line, join(line, attrsDocs)]))),
+            softline,
+          ]);
+    }
+  }
+
+  const closing = node.selfClosing ? ifBreak('/>', ' />') : '>';
+  const tagGroupId = Symbol('tag');
+  const openDoc = group(concat([openTag, attributesDoc, closing]), { id: tagGroupId });
+
+  if (node.selfClosing) {
+    return openDoc;
+  }
+
+  const childrenDocs: Doc[] = [];
+  path.each((childPath) => {
+    childrenDocs.push(print(childPath as AstPath<Node>));
+  }, 'children');
+
+  const closeDoc = concat(['</', node.tag, '>']);
+
+  if (shouldPreserveRawTextElement(node)) {
+    return concat([openDoc, (node.children[0] as TextNode).value, closeDoc]);
+  }
+
+  const singleChild = node.children.length === 1 ? node.children[0] : null;
+
+  if (
+    singleChild?.type === 'TextNode' &&
+    getEmbeddedRawTextParser(node, singleChild as TextNode, options) &&
+    childrenDocs.length === 1
+  ) {
+    return concat([openDoc, indent(concat([hardline, childrenDocs[0]])), hardline, closeDoc]);
+  }
+
+  const singleChildIsMustache = singleChild?.type === 'MustacheStatement';
+  const mustacheInsideBlock =
+    singleChildIsMustache && ancestors.some((ancestor) => ancestor?.type === 'BlockStatement');
+  const openTagFitsInline =
+    !breakAttrs && currentIndentLength + getInlineOpenTagLength(node, sortedAttributes, options) <= getPrintWidth(options);
+  const simpleInlineChildren =
+    node.children.length > 0 &&
+    node.children.every(
+      (child) =>
+        (child.type === 'TextNode' && !child.verbatim && !child.blankLines) || child.type === 'MustacheStatement',
+    );
+  const singleChildCanInline =
+    node.children.length === 1 &&
+    childrenDocs.length === 1 &&
+    singleChild?.type !== 'ElementNode' &&
+    singleChild?.type !== 'PartialStatement' &&
+    !docBreaks(childrenDocs[0]) &&
+    !mustacheInsideBlock &&
+    openTagFitsInline &&
+    currentIndentLength + getSingleInlineElementLength(node, sortedAttributes, singleChild as Node, options) <=
+      getPrintWidth(options);
+
+  if (singleChildCanInline) {
+    return concat([openDoc, childrenDocs[0], closeDoc]);
+  }
+
+  const singleTextLikeChildCanUseInlineTag =
+    node.children.length === 1 &&
+    childrenDocs.length === 1 &&
+    singleChild?.type !== 'ElementNode' &&
+    !docBreaks(childrenDocs[0]) &&
+    !mustacheInsideBlock &&
+    openTagFitsInline;
+
+  if (singleTextLikeChildCanUseInlineTag) {
+    return concat([openDoc, indent(concat([hardline, childrenDocs[0]])), hardline, closeDoc]);
+  }
+
+  const canInlineSimpleChildren =
+    simpleInlineChildren &&
+    !childrenDocs.some(docBreaks) &&
+    !mustacheInsideBlock &&
+    openTagFitsInline &&
+    currentIndentLength + getSimpleInlineElementLength(node, sortedAttributes, options) <= getPrintWidth(options);
+
+  if (canInlineSimpleChildren) {
+    return concat([openDoc, joinInlineChildren(node.children as Node[], childrenDocs), closeDoc]);
+  }
+
+  if (shouldPreserveSimpleInlineText(node, childrenDocs, mustacheInsideBlock)) {
+    return stringifySimpleInlineElement(node, sortedAttributes, options);
+  }
+
+  const canInlineMixedChildren =
+    isInlineContentTag(node.tag) &&
+    node.children.length > 0 &&
+    node.children.every(isInlineContentChild) &&
+    !childrenDocs.some(docBreaks) &&
+    !mustacheInsideBlock &&
+    openTagFitsInline &&
+    currentIndentLength + getSimpleInlineElementLength(node, sortedAttributes, options) <= getPrintWidth(options);
+
+  if (canInlineMixedChildren) {
+    return concat([openDoc, joinInlineChildren(node.children as Node[], childrenDocs), closeDoc]);
+  }
+
+  const inner =
+    childrenDocs.length > 0
+      ? concat([indent(concat([hardline, joinExpandedChildren(node.children as Node[], childrenDocs)])), hardline])
+      : '';
+
+  const expandedDoc = concat([openDoc, inner, closeDoc]);
+
+  return expandedDoc;
+}
+
+function printAttribute(attr: ElementAttribute, options: ParserOptions): Doc {
+  if (isRawAttribute(attr)) {
+    return attr.raw;
+  }
+
+  if (!isPlainAttribute(attr)) {
+    if ((attr.block as Node).type === 'BlockStatement') {
+      return printAttributeBlock(attr.block as BlockStatement);
+    }
+
+    if ((attr.block as Node).type === 'CommentStatement') {
+      return printCommentStatement(attr.block as CommentStatement, options);
+    }
+
+    return stringifyNode(attr.block as Node);
+  }
+
+  if (typeof attr.value === 'undefined' || attr.value === null) {
+    return attr.name;
+  }
+
+  const valueString = stringifyAttributeValue(attr.value as AttributeValue);
+  const quote = chooseAttributeQuote(valueString, options);
+
+  if (attr.name === 'class' && hasHandlebarsBlock(valueString)) {
+    if (classValueHasGluedBlock(attr.value as AttributeValue)) {
+      const compactValue = stringifyCompactClassValue(attr.value as AttributeValue);
+      const compactQuote = chooseAttributeQuote(compactValue, options);
+
+      return concat([attr.name, '=', compactQuote, escapeAttributeValue(compactValue, compactQuote), compactQuote]);
+    }
+
+    const classLines = formatClassValue(valueString, options);
+    return concat([
+      'class=',
+      quote,
+      indent(concat([hardline, join(hardline, classLines)])),
+      hardline,
+      quote,
+    ]);
+  }
+
+  if (attr.name === 'class' && shouldExpandStaticClassValue(valueString, options)) {
+    const classLines = formatStaticClassValue(valueString);
+    return concat([
+      'class=',
+      quote,
+      indent(concat([hardline, join(hardline, classLines)])),
+      hardline,
+      quote,
+    ]);
+  }
+
+  if (attr.name === 'class' && hasHandlebarsBlock(valueString)) {
+    const lines = formatHandlebarsBlockValue(valueString, options);
+    return concat([
+      attr.name,
+      '=',
+      quote,
+      indent(concat([hardline, join(hardline, lines)])),
+      hardline,
+      quote,
+    ]);
+  }
+
+  if (valueString.includes('\n')) {
+    const lines = formatMultilineAttributeValue(valueString);
+    return concat([
+      attr.name,
+      '=',
+      quote,
+      indent(concat([hardline, join(hardline, lines)])),
+      hardline,
+      quote,
+    ]);
+  }
+
+  return concat([attr.name, '=', quote, escapeAttributeValue(valueString, quote), quote]);
+}
+
+function printAttributeBlock(block: BlockStatement): Doc {
+  const open = printBlockOpen(block);
+  const bodyLines = formatAttributeBlockBody(stringifyNode(block.program as Program));
+  const body =
+    bodyLines.length > 0 ? concat([indent(concat([hardline, join(hardline, bodyLines)])), hardline]) : hardline;
+
+  const inverseParts: Doc[] = [];
+  (block.inverseChain ?? []).forEach((branch) => {
+    const branchLines = formatAttributeBlockBody(stringifyNode(branch.program as Program));
+    const branchBody =
+      branchLines.length > 0 ? concat([indent(concat([hardline, join(hardline, branchLines)])), hardline]) : hardline;
+    inverseParts.push(concat([printElseBranchOpen(branch), branchBody]));
+  });
+
+  if (block.inverse.body.length > 0) {
+    const inverseLines = formatAttributeBlockBody(stringifyNode(block.inverse as Program));
+    const elseTag = buildTemplateTag(templateDialect.getElseKeyword());
+    inverseParts.push(concat([elseTag, indent(concat([hardline, join(hardline, inverseLines)])), hardline]));
+  }
+
+  const inverse = inverseParts.length > 0 ? concat(inverseParts) : '';
+  const close = printBlockClose(block);
+
+  return concat([open, body, inverse, close]);
+}
+
+function stringifyAttributeValue(value: AttributeValue): string {
+  return value.parts.map((part) => stringifyNode(part as Node)).join('');
+}
+
+function getLastClassToken(value: string): string {
+  return value.match(/\S+\s*$/)?.[0].trim() ?? '';
+}
+
+function classTokenEndsWithContinuation(token: string): boolean {
+  return /[-_:]$/.test(token);
+}
+
+function blockProgramToCompactClassValue(program: Program): string {
+  const parts: string[] = [];
+  let previousNode: Node | null = null;
+
+  program.body.forEach((child) => {
+    const node = child as Node;
+    const value = stringifyCompactClassNode(node);
+    if (!value) {
+      return;
+    }
+
+    if (previousNode && shouldInsertCompactClassSeparator(previousNode, node)) {
+      parts.push(' ');
+    }
+
+    parts.push(value);
+    previousNode = node;
+  });
+
+  return parts.join('');
+}
+
+function stringifyCompactClassNode(node: Node): string {
+  switch (node.type) {
+    case 'TextNode':
+      return normalizeInlineText((node as TextNode).value);
+    case 'MustacheStatement':
+      return stringifyMustache(node as MustacheStatement);
+    case 'DecoratorStatement':
+      return stringifyDecorator(node as DecoratorStatement);
+    case 'PartialStatement': {
+      const partial = node as PartialStatement;
+      return buildTemplateTag(
+        `${templateDialect.getPartialPrefix()}${buildExpression(partial)}`,
+        getTrimOpen(partial),
+        getTrimClose(partial),
+      );
+    }
+    case 'BlockStatement':
+      return stringifyCompactClassBlock(node as BlockStatement);
+    case 'CommentStatement':
+      return stringifyNode(node);
+    default:
+      return stringifyNode(node);
+  }
+}
+
+function shouldInsertCompactClassSeparator(left: Node, right: Node): boolean {
+  if (left.type === 'TextNode') {
+    const trailingWhitespace = (left as TextNode).trailingWhitespace;
+    if (trailingWhitespace && !hasLineBreak(trailingWhitespace)) {
+      return true;
+    }
+  }
+
+  if (right.type === 'TextNode') {
+    const leadingWhitespace = (right as TextNode).leadingWhitespace;
+    if (leadingWhitespace && !hasLineBreak(leadingWhitespace)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function stringifyCompactClassBlock(block: BlockStatement): string {
+  const prefix = getBlockPrefix(block);
+  const printedPrefix = getPrintedBlockPrefix(prefix);
+  const expression = buildExpression(block);
+  const open = buildTemplateTag(
+    `${printedPrefix}${expression}`,
+    getTrimOpen(block),
+    getTrimClose(block),
+  );
+  const program = blockProgramToCompactClassValue(block.program as Program);
+  const inverseChain = (block.inverseChain ?? [])
+    .map((branch) => {
+      const branchExpression = buildExpression(branch);
+      const openBranch = buildTemplateTag(
+        `${branch.branchKeyword ?? templateDialect.getElseKeyword()} ${branchExpression}`,
+        getTrimOpen(branch),
+        getTrimClose(branch),
+      );
+      return `${openBranch}${blockProgramToCompactClassValue(branch.program as Program)}`;
+    })
+    .join('');
+  const inverse =
+    block.inverse.body.length > 0
+      ? `${buildTemplateTag(
+          templateDialect.getElseKeyword(),
+          block.inverseTrimOpen ? '-' : '',
+          block.inverseTrimClose ? '-' : '',
+        )}${blockProgramToCompactClassValue(block.inverse as Program)}`
+      : '';
+  const close = buildTemplateTag(
+    templateDialect.getBlockClosePrefix(block.path),
+    block.closeTrimOpen ? '-' : '',
+    block.closeTrimClose ? '-' : '',
+  );
+
+  return `${open}${program}${inverseChain}${inverse}${close}`;
+}
+
+function getClassBlockPrograms(block: BlockStatement): Program[] {
+  return [
+    block.program as Program,
+    ...((block.inverseChain ?? []).map((branch) => branch.program as Program)),
+    block.inverse as Program,
+  ];
+}
+
+function getFirstRenderableProgramNode(program: Program): Node | undefined {
+  return (program.body as Node[]).find((node) => stringifyCompactClassNode(node).length > 0);
+}
+
+function getLastRenderableProgramNode(program: Program): Node | undefined {
+  return (program.body as Node[])
+    .slice()
+    .reverse()
+    .find((node) => stringifyCompactClassNode(node).length > 0);
+}
+
+function hasRenderableProgramContent(program: Program): boolean {
+  return Boolean(getFirstRenderableProgramNode(program));
+}
+
+function programStartsWithClassSeparator(program: Program): boolean {
+  const first = getFirstRenderableProgramNode(program);
+  return first?.type === 'TextNode' && Boolean((first as TextNode).leadingWhitespace);
+}
+
+function programEndsWithClassSeparator(program: Program): boolean {
+  const last = getLastRenderableProgramNode(program);
+  return last?.type === 'TextNode' && Boolean((last as TextNode).trailingWhitespace);
+}
+
+function blockStartsWithClassSeparator(block: BlockStatement): boolean {
+  const programs = getClassBlockPrograms(block).filter(hasRenderableProgramContent);
+  return programs.length > 0 && programs.every(programStartsWithClassSeparator);
+}
+
+function blockEndsWithClassSeparator(block: BlockStatement): boolean {
+  const programs = getClassBlockPrograms(block).filter(hasRenderableProgramContent);
+  return programs.length > 0 && programs.every(programEndsWithClassSeparator);
+}
+
+function shouldGlueTextToFollowingClassBlock(text: string, block: BlockStatement): boolean {
+  if (blockStartsWithClassSeparator(block)) {
+    return false;
+  }
+
+  return !/\s$/.test(text) || classTokenEndsWithContinuation(getLastClassToken(text));
+}
+
+function shouldGlueClassBlockToFollowingText(block: BlockStatement, text: string): boolean {
+  if (blockEndsWithClassSeparator(block)) {
+    return false;
+  }
+
+  return !/^\s/.test(text);
+}
+
+function programHasGluedClassBlock(program: Program): boolean {
+  const body = program.body as Node[];
+
+  return body.some((node, index) => {
+    if (node.type !== 'BlockStatement') {
+      return false;
+    }
+
+    const previous = body[index - 1];
+    const next = body[index + 1];
+    const block = node as BlockStatement;
+    const isGluedToSibling =
+      (previous?.type === 'TextNode' && shouldGlueTextToFollowingClassBlock((previous as TextNode).value, block)) ||
+      (next?.type === 'TextNode' && shouldGlueClassBlockToFollowingText(block, (next as TextNode).value));
+
+    return isGluedToSibling || classBlockHasNestedGluedBlock(block);
+  });
+}
+
+function classBlockHasNestedGluedBlock(block: BlockStatement): boolean {
+  return getClassBlockPrograms(block).some(programHasGluedClassBlock);
+}
+
+function classValueHasGluedBlock(_value: AttributeValue): boolean {
+  // Handlebars can safely compact some class blocks. Nunjucks whitespace-control
+  // blocks such as `{%- if ... %}` are easier to keep idempotent when every
+  // statement token is printed on its own class line.
+  return false;
+}
+
+function stringifyCompactClassValue(value: AttributeValue): string {
+  const pieces: string[] = [];
+
+  value.parts.forEach((part, index, parts) => {
+    const previous = parts[index - 1];
+    const next = parts[index + 1];
+
+    if (part.type === 'TextNode') {
+      let text = (part as TextNode).value.replace(/\s+/g, ' ');
+
+      if (index === 0) {
+        text = text.trimStart();
+      }
+
+      if (index === parts.length - 1) {
+        text = text.trimEnd();
+      }
+
+      if (
+        next?.type === 'BlockStatement' &&
+        shouldGlueTextToFollowingClassBlock((part as TextNode).value, next as BlockStatement)
+      ) {
+        text = text.trimEnd();
+      }
+
+      if (
+        previous?.type === 'BlockStatement' &&
+        shouldGlueClassBlockToFollowingText(previous as BlockStatement, (part as TextNode).value)
+      ) {
+        text = text.trimStart();
+      }
+
+      pieces.push(text);
+      return;
+    }
+
+    if (part.type === 'BlockStatement') {
+      pieces.push(stringifyCompactClassBlock(part as BlockStatement));
+      return;
+    }
+
+    pieces.push(stringifyCompactClassNode(part as Node));
+  });
+
+  return pieces.join('').trim();
+}
+
+function stringifyAttribute(attr: ElementAttribute, options?: ParserOptions): string {
+  if (isRawAttribute(attr)) {
+    return attr.raw;
+  }
+
+  if (!isPlainAttribute(attr)) {
+    return stringifyNode(attr.block as Node);
+  }
+
+  if (!attr.value) {
+    return attr.name;
+  }
+
+  const value = stringifyAttributeValue(attr.value as AttributeValue);
+  const quote = chooseAttributeQuote(value, options);
+  return `${attr.name}=${quote}${escapeAttributeValue(value, quote)}${quote}`;
+}
+
+function getInlineOpenTagLength(node: ElementNode, attributes: ElementAttribute[], options?: ParserOptions): number {
+  const attrs = attributes.map((attr) => stringifyAttribute(attr, options)).join(' ');
+  const open = attrs ? `<${node.tag} ${attrs}` : `<${node.tag}`;
+  const close = node.selfClosing ? ' />' : '>';
+
+  return `${open}${close}`.length;
+}
+
+function stringifyInlineChild(node: Node, options?: ParserOptions): string {
+  switch (node.type) {
+    case 'TextNode':
+      return normalizeInlineText((node as TextNode).value);
+    case 'MustacheStatement':
+      return stringifyMustache(node as MustacheStatement);
+    case 'ElementNode': {
+      const element = node as ElementNode;
+      const sortOptions = options ?? ({} as ParserOptions);
+      const sortedAttributes = sortAttributes(element.attributes, sortOptions);
+      if (
+        isInlineContentTag(element.tag) &&
+        element.children.length > 0 &&
+        element.children.every(isInlineContentChild) &&
+        !sortedAttributes.some(shouldBreakAttribute)
+      ) {
+        return stringifySimpleInlineElement(element, sortedAttributes, sortOptions);
+      }
+
+      return stringifyNode(node);
+    }
+    default:
+      return stringifyNode(node);
+  }
+}
+
+function shouldInsertInlineSeparator(left: Node, right: Node): boolean {
+  if (left.type === 'TextNode' && hasInlineBoundaryWhitespace((left as TextNode).trailingWhitespace)) {
+    return !isPunctuationOnlyTextNode(left) || !hasLineBreak((left as TextNode).trailingWhitespace);
+  }
+
+  if (right.type === 'TextNode' && hasInlineBoundaryWhitespace((right as TextNode).leadingWhitespace)) {
+    return !isPunctuationOnlyTextNode(right) || !hasLineBreak((right as TextNode).leadingWhitespace);
+  }
+
+  if (isPunctuationOnlyTextNode(left) || isPunctuationOnlyTextNode(right)) {
+    return false;
+  }
+
+  return left.type !== 'TextNode' && right.type !== 'TextNode';
+}
+
+function shouldAttachExpandedChild(left: Node | undefined, right: Node): boolean {
+  return Boolean(left) && (isPunctuationOnlyTextNode(left) || isPunctuationOnlyTextNode(right));
+}
+
+function joinInlineChildren(nodes: Node[], docs: Doc[]): Doc {
+  const parts: Doc[] = [];
+
+  docs.forEach((doc, index) => {
+    if (index > 0 && shouldInsertInlineSeparator(nodes[index - 1], nodes[index])) {
+      parts.push(' ');
+    }
+
+    parts.push(doc);
+  });
+
+  return concat(parts);
+}
+
+function joinExpandedChildren(nodes: Node[], docs: Doc[]): Doc {
+  const parts: Doc[] = [];
+
+  docs.forEach((doc, index) => {
+    if (index > 0 && !shouldAttachExpandedChild(nodes[index - 1], nodes[index])) {
+      parts.push(hardline);
+    }
+
+    parts.push(doc);
+  });
+
+  return concat(parts);
+}
+
+function printBlockBody(children: Node[], docs: Doc[], options: ParserOptions): Doc {
+  if (docs.length === 0) {
+    return hardline;
+  }
+
+  if (canPrintInlineTextProgram(children, options)) {
+    return concat([indent(concat([hardline, stringifyInlineChildren(children, options)])), hardline]);
+  }
+
+  return concat([indent(concat([hardline, join(hardline, docs)])), hardline]);
+}
+
+function canPrintInlineTextProgram(nodes: Node[], options: ParserOptions): boolean {
+  return (
+    nodes.some((node) => node.type === 'TextNode') &&
+    nodes.every((node, index) => isInlineTextProgramChild(node, index, nodes, options))
+  );
+}
+
+function isInlineTextProgramChild(node: Node, index: number, nodes: Node[], options: ParserOptions): boolean {
+  if (node.type === 'MustacheStatement' || node.type === 'PartialStatement' || node.type === 'DecoratorStatement') {
+    return true;
+  }
+
+  if (node.type === 'CommentStatement') {
+    const comment = node as CommentStatement;
+    return !comment.block && !comment.multiline;
+  }
+
+  if (node.type === 'BlockStatement') {
+    return canInlineBlock(node as BlockStatement, options, 'Program');
+  }
+
+  if (node.type !== 'TextNode') {
+    return false;
+  }
+
+  const text = node as TextNode;
+  if (text.verbatim || text.blankLines || /[\r\n]/.test(text.value)) {
+    return false;
+  }
+
+  const leadingBreakAllowed = index === 0 || !hasLineBreak(text.leadingWhitespace);
+  const trailingBreakAllowed = index === nodes.length - 1 || !hasLineBreak(text.trailingWhitespace);
+
+  return leadingBreakAllowed && trailingBreakAllowed;
+}
+
+function stringifyInlineChildren(nodes: Node[], options?: ParserOptions): string {
+  return nodes.reduce((result, child, index) => {
+    const separator = index > 0 && shouldInsertInlineSeparator(nodes[index - 1], child) ? ' ' : '';
+    return `${result}${separator}${stringifyInlineChild(child, options)}`;
+  }, '');
+}
+
+function stringifySimpleInlineElement(node: ElementNode, attributes: ElementAttribute[], options?: ParserOptions): string {
+  const attrs = attributes.map((attr) => stringifyAttribute(attr, options)).join(' ');
+  const open = attrs ? `<${node.tag} ${attrs}>` : `<${node.tag}>`;
+  return `${open}${stringifyInlineChildren(node.children as Node[], options)}</${node.tag}>`;
+}
+
+function shouldPreserveRawTextElement(node: ElementNode): boolean {
+  return (
+    whitespaceSensitiveRawTextTags.has(node.tag.toLowerCase()) &&
+    node.children.length === 1 &&
+    node.children[0].type === 'TextNode' &&
+    (node.children[0] as TextNode).preserveWhitespace === true
+  );
+}
+
+function getSingleInlineElementLength(
+  node: ElementNode,
+  attributes: ElementAttribute[],
+  child: Node,
+  options?: ParserOptions,
+): number {
+  return getInlineOpenTagLength(node, attributes, options) + stringifyInlineChild(child, options).length + `</${node.tag}>`.length;
+}
+
+function getSimpleInlineElementLength(node: ElementNode, attributes: ElementAttribute[], options?: ParserOptions): number {
+  const childrenLength = stringifyInlineChildren(node.children as Node[], options).length;
+
+  return getInlineOpenTagLength(node, attributes, options) + childrenLength + `</${node.tag}>`.length;
+}
+
+function shouldPreserveSimpleInlineText(node: ElementNode, childrenDocs: Doc[], mustacheInsideBlock: boolean): boolean {
+  return (
+    isInlineContentTag(node.tag) &&
+    node.children.some((child) => child.type === 'MustacheStatement') &&
+    node.children.every(
+      (child) =>
+        (child.type === 'TextNode' && !(child as TextNode).verbatim && !(child as TextNode).blankLines) ||
+        child.type === 'MustacheStatement',
+    ) &&
+    !childrenDocs.some(docBreaks) &&
+    !mustacheInsideBlock
+  );
+}
+
+function isInlineContentTag(tag: string): boolean {
+  return inlineContentElements.has(tag.toLowerCase());
+}
+
+function isInlineContentChild(node: Node): boolean {
+  if ((node.type === 'TextNode' && !(node as TextNode).verbatim && !(node as TextNode).blankLines) || node.type === 'MustacheStatement') {
+    return true;
+  }
+
+  return node.type === 'ElementNode' && isInlineContentTag((node as ElementNode).tag);
+}
+
+function isSimpleInlineBlockNode(
+  node: Node,
+  options: ParserOptions,
+  parentType: Node['type'] | undefined,
+): boolean {
+  switch (node.type) {
+    case 'TextNode':
+      return !(node as TextNode).verbatim && !(node as TextNode).blankLines;
+    case 'MustacheStatement':
+    case 'PartialStatement':
+      return true;
+    case 'BlockStatement':
+      return canInlineBlock(node as BlockStatement, options, parentType);
+    default:
+      return false;
+  }
+}
+
+function canInlineBlock(
+  node: BlockStatement,
+  options: ParserOptions,
+  parentType: Node['type'] | undefined,
+): boolean {
+  const blockPrefix = getBlockPrefix(node);
+  if (blockPrefix !== '#' && blockPrefix !== '^' && blockPrefix !== '#*' && blockPrefix !== '$') {
+    return false;
+  }
+
+  if (hasOriginalLineBreak(node, options)) {
+    return false;
+  }
+
+  const programChildren = node.program.body;
+  const inverseChildren = node.inverse.body;
+  const inverseChainChildren = (node.inverseChain ?? []).flatMap((branch) => branch.program.body);
+  const allChildren = [...programChildren, ...inverseChainChildren, ...inverseChildren];
+
+  if (allChildren.length === 0) {
+    return false;
+  }
+
+  if (parentType === 'ElementNode') {
+    return false;
+  }
+
+  if (parentType && parentType !== 'Program' && parentType !== 'BlockStatement') {
+    return false;
+  }
+
+  if (!allChildren.every((child) => isSimpleInlineBlockNode(child as Node, options, 'BlockStatement'))) {
+    return false;
+  }
+
+  return stringifyNode(node as Node).length <= getPrintWidth(options);
+}
+
+function hasOriginalLineBreak(node: Node, options: ParserOptions): boolean {
+  const range = (node as { range?: [number, number] }).range;
+  const originalText = (options as { originalText?: string }).originalText;
+
+  return Boolean(range && originalText && /[\r\n]/.test(originalText.slice(range[0], range[1])));
+}
+
+function stringifyNode(node: Node): string {
+  switch (node.type) {
+    case 'TextNode':
+      return (node as TextNode).value;
+    case 'MustacheStatement': {
+      const mustache = node as MustacheStatement;
+      return stringifyMustache(mustache);
+    }
+    case 'DecoratorStatement': {
+      return stringifyDecorator(node as DecoratorStatement);
+    }
+    case 'PartialStatement': {
+      const partial = node as PartialStatement;
+      return buildTemplateTag(
+        `${templateDialect.getPartialPrefix()}${buildExpression(partial)}`,
+        getTrimOpen(partial),
+        getTrimClose(partial),
+      );
+    }
+    case 'CommentStatement': {
+      const comment = node as CommentStatement;
+      if (comment.block || comment.multiline) {
+        return templateDialect.getBlockCommentTag(comment.value);
+      }
+      return templateDialect.getLineCommentTag(comment.value);
+    }
+    case 'BlockStatement': {
+      const block = node as BlockStatement;
+      const prefix = getBlockPrefix(block);
+      const printedPrefix = getPrintedBlockPrefix(prefix);
+      const expression = buildExpression(block);
+      const open = buildTemplateTag(
+        `${printedPrefix}${expression}`,
+        getTrimOpen(block),
+        getTrimClose(block),
+      );
+      const program = stringifyInlineChildren(block.program.body as Node[]);
+      const inverseChain = (block.inverseChain ?? [])
+        .map((branch) => {
+          const branchExpression = buildExpression(branch);
+          const openBranch = buildTemplateTag(
+            `${branch.branchKeyword ?? templateDialect.getElseKeyword()} ${branchExpression}`,
+            getTrimOpen(branch),
+            getTrimClose(branch),
+          );
+          return `${openBranch}${stringifyInlineChildren(branch.program.body as Node[])}`;
+        })
+        .join('');
+      const inverse = block.inverse.body.length > 0
+        ? `${buildTemplateTag(
+            templateDialect.getElseKeyword(),
+            block.inverseTrimOpen ? '-' : '',
+            block.inverseTrimClose ? '-' : '',
+          )}${stringifyInlineChildren(block.inverse.body as Node[])}`
+        : '';
+      const close = buildTemplateTag(
+        templateDialect.getBlockClosePrefix(block.path),
+        block.closeTrimOpen ? '-' : '',
+        block.closeTrimClose ? '-' : '',
+      );
+      return `${open}${program}${inverseChain}${inverse}${close}`;
+    }
+    case 'ElementNode': {
+      const element = node as ElementNode;
+      const attrs = element.attributes.map((attr) => stringifyAttribute(attr)).join(' ');
+      const open = attrs ? `<${element.tag} ${attrs}${element.selfClosing ? ' />' : '>'}` : `<${element.tag}${element.selfClosing ? ' />' : '>'}`;
+      if (element.selfClosing) {
+        return open;
+      }
+      const children = element.children.map((child) => stringifyNode(child as Node)).join('');
+      return `${open}${children}</${element.tag}>`;
+    }
+    case 'Program':
+      return (node as Program).body.map((child) => stringifyNode(child as Node)).join('');
+    case 'UnmatchedNode':
+      return (node as UnmatchedNode).raw;
+    default:
+      return '';
+  }
+}
+
+function formatClassValue(value: string, options: ParserOptions): Doc[] {
+  const tokens = tokenizeClass(value);
+  const lines: Doc[] = [];
+  let depth = 0;
+
+  tokens.forEach((token) => {
+    if (/^\{%[-\s]*(end|endeach|endall)/.test(token)) {
+      depth = Math.max(depth - 1, 0);
+      lines.push(indentWithDepth(token, depth, options));
+      return;
+    }
+
+    if (/^\{%[-\s]*(if|for|asyncEach|asyncAll|block|macro|set|filter|call)\b/.test(token)) {
+      lines.push(indentWithDepth(token, depth, options));
+      depth += 1;
+      return;
+    }
+
+    if (/^\{%[-\s]*(else|elif|elseif)\b/.test(token)) {
+      depth = Math.max(depth - 1, 0);
+      lines.push(indentWithDepth(token, depth, options));
+      depth += 1;
+      return;
+    }
+
+    lines.push(indentWithDepth(token, depth, options));
+  });
+
+  return lines;
+}
+
+function indentWithDepth(content: string, depth: number, options: ParserOptions): Doc {
+  const prefix = depth > 0 ? getIndentUnit(options).repeat(depth) : '';
+  return concat([prefix, content]);
+}
+
+function tokenizeClass(value: string): string[] {
+  const tokens: string[] = [];
+  const mustacheRegex = /({{[\s\S]*?}}|{%[\s\S]*?%})/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = mustacheRegex.exec(value)) !== null) {
+    const before = value.slice(lastIndex, match.index);
+    before.split(/\s+/).filter(Boolean).forEach((word) => tokens.push(word));
+    tokens.push(match[0].trim());
+    lastIndex = match.index + match[0].length;
+  }
+
+  const remaining = value.slice(lastIndex);
+  remaining.split(/\s+/).filter(Boolean).forEach((word) => tokens.push(word));
+
+  return mergeClassTokenFragments(tokens);
+}
+
+function isSimpleMustacheToken(token: string): boolean {
+  return (
+    token.startsWith('{{') &&
+    !token.startsWith('{{#') &&
+    !token.startsWith('{{/') &&
+    !token.startsWith('{{else')
+  );
+}
+
+function shouldGlueClassTokens(left: string, right: string): boolean {
+  return (
+    (isSimpleMustacheToken(right) && /[-_:]$/.test(left)) ||
+    (isSimpleMustacheToken(left) && /^[-_:]/.test(right))
+  );
+}
+
+function mergeClassTokenFragments(tokens: string[]): string[] {
+  const merged: string[] = [];
+
+  tokens.forEach((token) => {
+    const previous = merged[merged.length - 1];
+    if (previous && shouldGlueClassTokens(previous, token)) {
+      merged[merged.length - 1] = `${previous}${token}`;
+      return;
+    }
+
+    merged.push(token);
+  });
+
+  return merged;
+}
+
+function formatStaticClassValue(value: string): Doc[] {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token);
+}
+
+function chooseAttributeQuote(value: string, options?: ParserOptions): '"' | "'" {
+  const preferSingleQuote = (options as Record<string, unknown> | undefined)?.singleQuote === true;
+
+  if (preferSingleQuote && !value.includes("'")) {
+    return "'";
+  }
+
+  if (value.includes('"') && !value.includes("'")) {
+    return "'";
+  }
+
+  return '"';
+}
+
+function escapeAttributeValue(value: string, quote: '"' | "'"): string {
+  if (quote === '"') {
+    return value.replace(/"/g, '&quot;');
+  }
+
+  return value.replace(/'/g, '&#39;');
+}
+
+function shouldExpandStaticClassValue(value: string, options: ParserOptions): boolean {
+  const tokens = value.split(/\s+/).filter(Boolean);
+
+  if (tokens.length < 2) {
+    return false;
+  }
+
+  return `class="${value.trim()}"`.length > getPrintWidth(options);
+}
+
+function stringifyMustache(node: MustacheStatement): string {
+  const { open, close } = getTemplateTagDelimiters(node.triple);
+  const content = buildExpression(node);
+
+  return `${open}${getTrimOpen(node)}${getMustacheOpenPadding(node, content)}${content}${getMustacheClosePadding(node, content)}${getTrimClose(node)}${close}`;
+}
+
+function stringifyDecorator(node: DecoratorStatement): string {
+  const content = buildExpression(node);
+  return buildTemplateTag(
+    `${templateDialect.getDecoratorPrefix()}${content}${getTrimClosePadding(node, content)}`,
+    getTrimOpen(node),
+    getTrimClose(node),
+  );
+}
+
+function shouldPrintCallableMultiline(
+  node: CallableStatement,
+  content: string,
+  options: ParserOptions,
+  allowHashWrap: boolean,
+): boolean {
+  const expressionPartCount = node.hash.length + node.params.length;
+  const canWrapPlainParams = !node.params.some(shouldKeepParamInline);
+
+  return (
+    expressionPartCount > 1 &&
+    ((allowHashWrap && node.hash.length > 0) || (canWrapPlainParams && content.length > getPrintWidth(options)))
+  );
+}
+
+function buildCallableParamsDocs(node: CallableStatement): Doc[] {
+  const paramsDocs: Doc[] = [];
+  node.params.forEach((param) => paramsDocs.push(param));
+  node.hash.forEach((pair) => paramsDocs.push(formatHash(pair)));
+
+  return paramsDocs;
+}
+
+function printCallableStatement(node: CallableStatement, config: CallablePrintConfig): Doc {
+  if (config.multiline) {
+    return group(
+      concat([
+        config.open,
+        getTrimOpen(node),
+        config.multilineHead,
+        indent(concat([hardline, join(hardline, buildCallableParamsDocs(node))])),
+        hardline,
+        getTrimClose(node),
+        config.close,
+      ]),
+    );
+  }
+
+  return concat([
+    config.open,
+    getTrimOpen(node),
+    config.openPadding ?? '',
+    config.inlineContent,
+    config.closePadding,
+    getTrimClose(node),
+    config.close,
+  ]);
+}
+
+function printMustache(node: MustacheStatement, options: ParserOptions): Doc {
+  const content = buildExpression(node);
+  const { open, close } = getTemplateTagDelimiters(node.triple);
+
+  return printCallableStatement(node, {
+    open,
+    close,
+    inlineContent: content,
+    multilineHead: node.path,
+    openPadding: getMustacheOpenPadding(node, content),
+    closePadding: getMustacheClosePadding(node, content),
+    multiline: !node.triple && shouldPrintCallableMultiline(node, content, options, true),
+  });
+}
+
+function printDecorator(node: DecoratorStatement, options: ParserOptions): Doc {
+  const content = buildExpression(node);
+  const { open, close } = getTemplateTagDelimiters(false);
+  const decoratorPrefix = templateDialect.getDecoratorPrefix();
+
+  return printCallableStatement(node, {
+    open,
+    close,
+    inlineContent: `${decoratorPrefix}${content}`,
+    multilineHead: `${decoratorPrefix}${node.path}`,
+    closePadding: getTrimClosePadding(node, content),
+    multiline: shouldPrintCallableMultiline(node, content, options, false),
+  });
+}
+
+function printBlock(path: AstPath<BlockStatement>, options: ParserOptions, print: (path: AstPath) => Doc): Doc {
+  const node = path.getValue();
+  const parentNode = path.getParentNode() as Node | undefined;
+
+  if (canInlineBlock(node, options, parentNode?.type)) {
+    return stringifyNode(node as Node);
+  }
+
+  const open = printBlockOpen(node);
+  const bodyDocs: Doc[] = [];
+  path.call((programPath) => {
+    programPath.each((childPath) => {
+      const childNode = childPath.getValue() as Node;
+      if (childNode.type === 'TextNode' && childNode.blankLines && getMaxEmptyLines(options) === 0) {
+        return;
+      }
+
+      const doc = print(childPath as AstPath<Node>);
+      if (doc === null) {
+        return;
+      }
+      bodyDocs.push(doc);
+    }, 'body');
+  }, 'program');
+
+  const body = printBlockBody(node.program.body as Node[], bodyDocs, options);
+
+  const inverseParts: Doc[] = [];
+  (node.inverseChain ?? []).forEach((branch, index) => {
+    const branchDocs: Doc[] = [];
+    path.call((branchProgramPath) => {
+      branchProgramPath.each((childPath) => {
+        const childNode = childPath.getValue() as Node;
+        if (childNode.type === 'TextNode' && childNode.blankLines && getMaxEmptyLines(options) === 0) {
+          return;
+        }
+
+        const doc = print(childPath as AstPath<Node>);
+        if (doc === null) {
+          return;
+        }
+        branchDocs.push(doc);
+      }, 'body');
+    }, 'inverseChain', index, 'program');
+
+    const branchBody = printBlockBody(branch.program.body as Node[], branchDocs, options);
+    inverseParts.push(concat([printElseBranchOpen(branch), branchBody]));
+  });
+
+  if (node.inverse.body.length > 0) {
+    const inverseDocs: Doc[] = [];
+    path.call((inversePath) => {
+      inversePath.each((childPath) => {
+        const childNode = childPath.getValue() as Node;
+        if (childNode.type === 'TextNode' && childNode.blankLines && getMaxEmptyLines(options) === 0) {
+          return;
+        }
+
+        const doc = print(childPath as AstPath<Node>);
+        if (doc === null) {
+          return;
+        }
+        inverseDocs.push(doc);
+      }, 'body');
+    }, 'inverse');
+    inverseParts.push(concat([printFinalElseOpen(node), printBlockBody(node.inverse.body as Node[], inverseDocs, options)]));
+  }
+
+  const inverse = inverseParts.length > 0 ? concat(inverseParts) : '';
+  const close = printBlockClose(node);
+
+  return concat([open, body, inverse, close]);
+}
+
+function printBlockOpen(node: BlockStatement): Doc {
+  const expression = buildExpression(node);
+  const prefix = getBlockPrefix(node);
+  const printedPrefix = getPrintedBlockPrefix(prefix);
+
+  return printExpressionTag(printedPrefix, expression, node);
+}
+
+function getPrintedBlockPrefix(prefix: ReturnType<typeof getBlockPrefix>): string {
+  return templateDialect.getPrintedBlockPrefix(prefix);
+}
+
+function printExpressionTag(head: string, expression: string, node: BlockStatement | ElseBranch): Doc {
+  const { open, close } = getTemplateTagDelimiters(true);
+  const multilineExpression = splitMultilineExpression(expression);
+  const openPadding = head.length > 0 || expression.length > 0 ? ' ' : '';
+
+  if (multilineExpression) {
+    return concat([
+      open,
+      getTrimOpen(node),
+      openPadding,
+      head,
+      multilineExpression[0],
+      indent(concat([hardline, join(hardline, multilineExpression.slice(1))])),
+      hardline,
+      getTrimClose(node),
+      close,
+    ]);
+  }
+
+  return concat([
+    open,
+    getTrimOpen(node),
+    openPadding,
+    head,
+    expression,
+    getTrimClosePadding(node, expression),
+    getTrimClose(node),
+    close,
+  ]);
+}
+
+function printFinalElseOpen(node: BlockStatement): Doc {
+  return buildTemplateTag(
+    templateDialect.getElseKeyword(),
+    node.inverseTrimOpen ? '-' : '',
+    node.inverseTrimClose ? '-' : '',
+  );
+}
+
+function printElseBranchOpen(node: ElseBranch): Doc {
+  const expression = buildExpression(node);
+  const keyword = node.branchKeyword ?? 'elif';
+
+  return printExpressionTag(`${keyword} `, expression, node);
+}
+
+function printBlockClose(node: BlockStatement): Doc {
+  return buildTemplateTag(
+    templateDialect.getBlockClosePrefix(node.path),
+    node.closeTrimOpen ? '-' : '',
+    node.closeTrimClose ? '-' : '',
+  );
+}
+
+function printPartial(node: PartialStatement, options: ParserOptions): Doc {
+  const name = node.path;
+  const { open: tagOpen, close: tagClose } = getTemplateTagDelimiters(false);
+  const open = concat([tagOpen, getTrimOpen(node), templateDialect.getPartialPrefix()]);
+  const close = concat([getTrimClose(node), tagClose]);
+  if (node.params.length === 0 && node.hash.length === 0) {
+    return concat([open, name, close]);
+  }
+
+  const paramsDocs: Doc[] = [];
+  node.params.forEach((param) => paramsDocs.push(formatPartialParam(param, options)));
+  node.hash.forEach((pair) => paramsDocs.push(formatPartialParam(formatHash(pair), options)));
+
+  return group(
+    concat([
+      open,
+      name,
+      indent(concat([hardline, join(hardline, paramsDocs)])),
+      hardline,
+      close,
+    ]),
+  );
+}
+
+function formatPartialParam(param: string, options: ParserOptions): Doc {
+  if (!param.includes('\n')) {
+    return param;
+  }
+
+  const lines = trimSurroundingBlankLines(param.split('\n'));
+
+  if (lines.length === 0) {
+    return '';
+  }
+
+  const [firstLine, ...rest] = lines;
+
+  if (rest.length === 0) {
+    return firstLine;
+  }
+
+  const normalizedRest = formatMultilineParamRest(rest, options);
+
+  return concat([firstLine, hardline, join(hardline, normalizedRest)]);
+}
+
+function formatMultilineComment(content: string, options: ParserOptions, inlineMarkers = false): Doc {
+  const hasStandaloneCloseMarker = inlineMarkers && /\n[ \t]*$/.test(content);
+  const lines = trimSurroundingBlankLines(content.replace(/[ \t]+$/gm, '').split('\n'));
+  const shouldInlineMarkup = !inlineMarkers && shouldFormatCommentAsInlineMarkup(lines);
+  const markers = templateDialect.getBlockCommentMarkers();
+
+  if (lines.length === 0) {
+    return inlineMarkers ? markers.emptyInline : markers.emptyBlock;
+  }
+
+  if (inlineMarkers || shouldInlineMarkup) {
+    const strippedLines = inlineMarkers ? stripCommonIndent(lines, 1) : stripCommonIndent(lines);
+    const [firstLine, ...restLines] = strippedLines;
+    const first = firstLine.trimStart();
+
+    if (restLines.length === 0) {
+      return hasStandaloneCloseMarker
+        ? concat([markers.inlineOpen, first, hardline, markers.blockClose])
+        : concat([markers.inlineOpen, first, markers.inlineClose]);
+    }
+
+    const normalizedRest = normalizeInlineCommentLines(restLines, options).map((line) => {
+      if (!hasStandaloneCloseMarker || line.trim() === '') {
+        return line;
+      }
+
+      return `${getIndentUnit(options)}${line}`;
+    });
+
+    const lastLine = normalizedRest[normalizedRest.length - 1];
+    const leadingLines = normalizedRest.slice(0, -1);
+
+    if (hasStandaloneCloseMarker) {
+      return concat([
+        markers.inlineOpen,
+        first,
+        hardline,
+        leadingLines.length > 0 ? concat([join(hardline, leadingLines), hardline]) : '',
+        lastLine,
+        hardline,
+        markers.blockClose,
+      ]);
+    }
+
+    return concat([
+      markers.inlineOpen,
+      first,
+      hardline,
+      leadingLines.length > 0 ? concat([join(hardline, leadingLines), hardline]) : '',
+      lastLine,
+      markers.inlineClose,
+    ]);
+  }
+
+  const normalizedLines = stripCommonIndent(lines).map((line) => {
+    if (line.trim() === '') {
+      return '';
+    }
+
+    return `${getIndentUnit(options)}${line}`;
+  });
+
+  const body = join(hardline, normalizedLines);
+
+  return concat([
+    markers.blockOpen,
+    hardline,
+    body,
+    hardline,
+    markers.blockClose,
+  ]);
+}
+
+function shouldFormatCommentAsInlineMarkup(lines: string[]): boolean {
+  const nonEmptyLines = lines.filter((line) => line.trim() !== '');
+
+  if (nonEmptyLines.length < 2) {
+    return false;
+  }
+
+  const firstLine = nonEmptyLines[0].trim();
+  const lastLine = nonEmptyLines[nonEmptyLines.length - 1].trim();
+
+  return /^<[\w:-]+$/.test(firstLine) && (/\/>$/.test(lastLine) || /^<\/[\w:-]+>$/.test(lastLine));
+}
+
+function normalizeInlineCommentLines(lines: string[], options: ParserOptions): string[] {
+  const indentUnit = getIndentUnit(options);
+  const nonEmptyLines = lines.filter((line) => line.trim() !== '');
+
+  if (nonEmptyLines.length === 0) {
+    return lines.map(() => '');
+  }
+
+  const baseIndent = nonEmptyLines.reduce((min, line) => {
+    const indentLength = (line.match(/^[ \t]*/) || [''])[0].length;
+    return Math.min(min, indentLength);
+  }, Number.MAX_SAFE_INTEGER);
+
+  const relativeIndentLengths = Array.from(
+    new Set(
+      nonEmptyLines.map((line) => {
+        const indentLength = (line.match(/^[ \t]*/) || [''])[0].length;
+        return Math.max(indentLength - baseIndent, 0);
+      }),
+    ),
+  ).sort((a, b) => a - b);
+
+  const indentRank = new Map(relativeIndentLengths.map((length, index) => [length, index]));
+
+  return lines.map((line) => {
+    if (line.trim() === '') {
+      return '';
+    }
+
+    const indentLength = (line.match(/^[ \t]*/) || [''])[0].length;
+    const relativeIndent = Math.max(indentLength - baseIndent, 0);
+    const level = indentRank.get(relativeIndent) ?? 0;
+    const content = line.slice(indentLength).replace(/[ \t]+$/, '');
+
+    return `${indentUnit.repeat(level)}${content}`;
+  });
+}
+
+function buildExpression(node: PrintableExpression): string {
+  if (node.rawExpression) {
+    return node.rawExpression;
+  }
+
+  const pieces: string[] = [];
+  if (node.path) {
+    pieces.push(node.path);
+  }
+  if (node.params.length > 0) {
+    pieces.push(...node.params);
+  }
+  if (node.hash.length > 0) {
+    pieces.push(...node.hash.map((pair) => formatHash(pair)));
+  }
+  if (node.blockParams && node.blockParams.length > 0) {
+    pieces.push('as', `|${node.blockParams.join(' ')}|`);
+  }
+  return pieces.join(' ');
+}
+
+function formatHash(pair: HashPair): string {
+  return `${pair.key}=${pair.value}`;
+}
+
+function formatMultilineAttributeValue(value: string): Doc[] {
+  const lines = value.split('\n');
+
+  while (lines.length > 0 && lines[0].trim() === '') {
+    lines.shift();
+  }
+
+  while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+    lines.pop();
+  }
+
+  const commonIndent = lines.reduce((min, line) => {
+    if (line.trim() === '') return min;
+    const indentLength = (line.match(/^[ \t]*/) || [''])[0].length;
+    return Math.min(min, indentLength);
+  }, Number.MAX_SAFE_INTEGER);
+
+  const normalizedIndent = Number.isFinite(commonIndent) ? commonIndent : 0;
+
+  return lines.map((line) => {
+    const indentLength = (line.match(/^[ \t]*/) || [''])[0].length;
+    const trimmedLine = line.slice(Math.min(indentLength, normalizedIndent));
+    return trimmedLine.replace(/[ \t]+$/, '');
+  });
+}
+
+function hasHandlebarsBlock(value: string): boolean {
+  return /\{%[-\s]*(if|for|asyncEach|asyncAll|block|macro|set|filter|call)\b/.test(value) && /\{%[-\s]*(end[a-zA-Z]*|else|elif|elseif)\b/.test(value);
+}
+
+function formatHandlebarsBlockValue(value: string, options: ParserOptions): Doc[] {
+  const tokens: string[] = [];
+  const mustacheRegex = /({{[\s\S]*?}}|{%[\s\S]*?%})/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = mustacheRegex.exec(value)) !== null) {
+    const before = value.slice(lastIndex, match.index).trim();
+    if (before) {
+      tokens.push(before);
+    }
+
+    tokens.push(match[0].trim());
+    lastIndex = match.index + match[0].length;
+  }
+
+  const remaining = value.slice(lastIndex).trim();
+  if (remaining) {
+    tokens.push(remaining);
+  }
+
+  const lines: Doc[] = [];
+  let depth = 0;
+
+  tokens.forEach((token) => {
+    const isClosing = /^\{%[-\s]*(end|endeach|endall)/.test(token);
+    const isElse = /^\{%[-\s]*(else|elif|elseif)\b/.test(token);
+    const isBlockOpen = /^\{%[-\s]*(if|for|asyncEach|asyncAll|block|macro|set|filter|call)\b/.test(token);
+
+    if (isClosing || isElse) {
+      depth = Math.max(depth - 1, 0);
+    }
+
+    lines.push(indentWithDepth(token, depth, options));
+
+    if (isBlockOpen || isElse) {
+      depth += 1;
+    }
+  });
+
+  return lines;
+}
+
+function formatAttributeBlockBody(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/, ''))
+    .filter((line, index, lines) => {
+      if (line.trim() !== '') {
+        return true;
+      }
+
+      return index > 0 && index < lines.length - 1;
+    })
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
