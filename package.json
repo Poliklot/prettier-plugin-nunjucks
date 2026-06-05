@@ -45,7 +45,7 @@
   ],
   "scripts": {
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",
-    "test": "node --test test",
+    "test": "node --test test/*.test.mjs",
     "check": "npm run build && npm test && node scripts/run-fuzz-check.mjs",
     "corpus:check": "node scripts/run-corpus-check.mjs",
     "corpus:oss": "node scripts/run-oss-corpus-check.mjs",
