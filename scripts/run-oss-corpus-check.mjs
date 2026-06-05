@@ -10,9 +10,19 @@ const corpusRoot = path.resolve(process.env.OSS_CORPUS_ROOT ?? path.join(os.tmpd
 const skipClone = process.env.OSS_CORPUS_SKIP_CLONE === '1' || process.argv.includes('--no-clone');
 
 const repos = [
-  { slug: '11ty/eleventy-base-blog', dir: 'eleventy-base-blog' },
-  { slug: 'mozilla/nunjucks', dir: 'nunjucks' },
-  { slug: 'alphagov/govuk-frontend', dir: 'govuk-frontend' },
+  { slug: 'a11yproject/a11yproject.com', dir: 'a11yproject__a11yproject.com' },
+  { slug: 'GoogleChrome/web.dev', dir: 'GoogleChrome__web.dev' },
+  { slug: 'jamstack/jamstack.org', dir: 'jamstack__jamstack.org' },
+  { slug: '11ty/eleventy-base-blog', dir: '11ty__eleventy-base-blog' },
+  { slug: '11ty/11ty-website', dir: '11ty__11ty-website' },
+  { slug: 'ipld/ipld', dir: 'ipld__ipld' },
+  { slug: 'stefanjudis/tiny-helpers', dir: 'stefanjudis__tiny-helpers' },
+  { slug: 'Andy-set-studio/hylia', dir: 'Andy-set-studio__hylia' },
+  { slug: 'alphagov/govuk-design-system', dir: 'alphagov__govuk-design-system' },
+  { slug: 'alphagov/govuk-frontend', dir: 'alphagov__govuk-frontend' },
+  { slug: 'madrilene/eleventy-excellent', dir: 'madrilene__eleventy-excellent' },
+  { slug: 'danurbanowicz/eleventy-netlify-boilerplate', dir: 'danurbanowicz__eleventy-netlify-boilerplate' },
+  { slug: 'mozilla/nunjucks', dir: 'mozilla__nunjucks' },
 ];
 
 function run(command, args, options = {}) {

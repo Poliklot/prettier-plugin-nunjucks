@@ -36,7 +36,7 @@ type CallableStatement = MustacheStatement | DecoratorStatement;
 interface CallablePrintConfig {
   open: string;
   close: string;
-  inlineContent: string;
+  inlineContent: string | Doc;
   multilineHead: string;
   openPadding?: string;
   closePadding: string;
@@ -468,9 +468,21 @@ function canFormatEmbeddedRawText(content: string, tag: string, parser: Embedded
   return (
     content.trim() !== '' &&
     !new RegExp(`</\\s*${tag}`, 'i').test(content) &&
+    !(parser === 'css' && shouldPreserveLargeMinifiedCss(content)) &&
     !(tag === 'style' && hasMultilineBlockComment(content)) &&
     prepareEmbeddedRawText(content, parser) !== null
   );
+}
+
+function shouldPreserveLargeMinifiedCss(content: string): boolean {
+  const trimmed = content.trim();
+  if (trimmed.length < 20000) {
+    return false;
+  }
+
+  const lines = trimmed.split('\n');
+  const longestLine = lines.reduce((max, line) => Math.max(max, line.length), 0);
+  return longestLine > 1000;
 }
 
 function prepareEmbeddedRawText(content: string, parser: EmbeddedRawTextParser): PreparedEmbeddedRawText | null {
@@ -2033,6 +2045,19 @@ function printCallableStatement(node: CallableStatement, config: CallablePrintCo
     );
   }
 
+  if (docHasHardline(config.inlineContent)) {
+    return group(
+      concat([
+        config.open,
+        getTrimOpen(node),
+        indent(concat([hardline, config.inlineContent])),
+        hardline,
+        getTrimClose(node),
+        config.close,
+      ]),
+    );
+  }
+
   return concat([
     config.open,
     getTrimOpen(node),
@@ -2045,17 +2070,18 @@ function printCallableStatement(node: CallableStatement, config: CallablePrintCo
 }
 
 function printMustache(node: MustacheStatement, options: ParserOptions): Doc {
-  const content = buildExpression(node);
+  const content = buildExpression(node, options);
+  const inlineContent = expressionToDoc(content);
   const { open, close } = getTemplateTagDelimiters(node.triple);
 
   return printCallableStatement(node, {
     open,
     close,
-    inlineContent: content,
+    inlineContent,
     multilineHead: node.path,
     openPadding: getMustacheOpenPadding(node, content),
     closePadding: getMustacheClosePadding(node, content),
-    multiline: !node.triple && shouldPrintCallableMultiline(node, content, options, true),
+    multiline: !node.triple && !content.includes('\n') && shouldPrintCallableMultiline(node, content, options, true),
   });
 }
 
@@ -2384,9 +2410,9 @@ function normalizeInlineCommentLines(lines: string[], options: ParserOptions): s
   });
 }
 
-function buildExpression(node: PrintableExpression): string {
+function buildExpression(node: PrintableExpression, options?: ParserOptions): string {
   if (node.rawExpression) {
-    return node.rawExpression;
+    return options ? formatNunjucksRawExpression(node.rawExpression, options) : node.rawExpression;
   }
 
   const pieces: string[] = [];
@@ -2407,6 +2433,168 @@ function buildExpression(node: PrintableExpression): string {
 
 function formatHash(pair: HashPair): string {
   return `${pair.key}=${pair.value}`;
+}
+
+function expressionToDoc(expression: string): Doc {
+  if (!expression.includes('\n')) {
+    return expression;
+  }
+
+  return join(hardline, expression.split('\n'));
+}
+
+function shouldFormatNunjucksRawExpression(expression: string, options: ParserOptions): boolean {
+  const trimmed = expression.trim();
+
+  if (!/[{\[(]/.test(trimmed)) {
+    return false;
+  }
+
+  return /[\r\n]/.test(trimmed) || trimmed.length > getPrintWidth(options);
+}
+
+function getNextNonWhitespace(value: string, start: number): string {
+  for (let index = start; index < value.length; index += 1) {
+    const char = value[index];
+    if (!/\s/.test(char)) {
+      return char;
+    }
+  }
+
+  return '';
+}
+
+function shouldInsertExpressionSpace(current: string, next: string): boolean {
+  if (!current || /\s$/.test(current)) {
+    return false;
+  }
+
+  return !/[,:;)}\]]/.test(next) && !/[({\[]$/.test(current);
+}
+
+function formatNunjucksRawExpression(expression: string, options: ParserOptions): string {
+  if (!shouldFormatNunjucksRawExpression(expression, options)) {
+    return expression;
+  }
+
+  const source = expression.trim();
+  const indentUnit = getIndentUnit(options);
+  const lines: string[] = [];
+  const stack: Array<{ opener: string; indent: number }> = [];
+  let current = '';
+  let level = 0;
+  let currentIndentLevel = 0;
+  let quote: '"' | "'" | '`' | null = null;
+  let escaped = false;
+
+  const pushLine = () => {
+    const trimmed = current.trim();
+    if (trimmed) {
+      lines.push(`${indentUnit.repeat(currentIndentLevel)}${trimmed}`);
+    }
+    current = '';
+    currentIndentLevel = level;
+  };
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (quote) {
+      if (char === '\r' || char === '\n') {
+        current += '\n' + indentUnit.repeat(level);
+        if (char === '\r' && source[index + 1] === '\n') {
+          index += 1;
+        }
+        while (index + 1 < source.length && /[ \t]/.test(source[index + 1])) {
+          index += 1;
+        }
+        escaped = false;
+        continue;
+      }
+
+      current += char;
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === quote) {
+        quote = null;
+      }
+
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      const next = getNextNonWhitespace(source, index + 1);
+      if (next && shouldInsertExpressionSpace(current, next)) {
+        current += ' ';
+      }
+      continue;
+    }
+
+    if (char === '{' || char === '[' || char === '(') {
+      const next = getNextNonWhitespace(source, index + 1);
+      const matchingClose = char === '{' ? '}' : char === '[' ? ']' : ')';
+      const keepNextCollectionWithCall = char === '(' && (next === '{' || next === '[');
+      const openerIndent = keepNextCollectionWithCall ? 0 : 1;
+
+      current = /:\s$/.test(current) ? current + char : current.trimEnd() + char;
+      stack.push({ opener: char, indent: openerIndent });
+      level += openerIndent;
+
+      if (next && next !== matchingClose && !keepNextCollectionWithCall) {
+        pushLine();
+      }
+
+      continue;
+    }
+
+    if (char === '}' || char === ']' || char === ')') {
+      const frame = stack.pop();
+      const compactTransparentCallClose = char === ')' && frame?.opener === '(' && frame.indent === 0 && /^[}\]]$/.test(current.trim());
+
+      if (current.trim() && !compactTransparentCallClose) {
+        pushLine();
+      }
+
+      level = Math.max(level - (frame?.indent ?? 1), 0);
+      currentIndentLevel = level;
+      current = compactTransparentCallClose ? `${current.trim()}${char}` : char;
+      continue;
+    }
+
+    if (char === ',') {
+      current = current.trimEnd() + ',';
+      pushLine();
+      continue;
+    }
+
+    if (char === ':') {
+      current = current.trimEnd() + ': ';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    pushLine();
+  }
+
+  return lines.join('\n');
 }
 
 function formatMultilineAttributeValue(value: string): Doc[] {

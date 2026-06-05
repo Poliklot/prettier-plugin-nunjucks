@@ -119,6 +119,30 @@ describe('prettier-plugin-nunjucks formatting', () => {
     assert.equal(await format(output, { printWidth: 100 }), output);
   });
 
+  it('formats large Nunjucks macro calls with object and array literals', async () => {
+    const source = `{{ render_product_price_block({                       
+        title: "Текстиль",
+        images: [
+          "one.webp",
+          "two.webp"
+        ],
+        imageSettings: [
+          {
+             hitboxViewBox: "0 0 230 425",
+            z: 2
+          }
+        ],
+        backgroundFlow: true
+      }) }}`;
+    const output = await format(source, { printWidth: 100 });
+
+    assert.equal(output.includes('{{ render_product_price_block({                       '), false);
+    assert.equal(output.includes('images: ['), true);
+    assert.equal(output.includes('imageSettings: ['), true);
+    assert.equal(output.includes('  hitboxViewBox: "0 0 230 425",'), true);
+    assert.equal(output.includes('})\n}}'), true);
+    assert.equal(await format(output, { printWidth: 100 }), output);
+  });
 
   it('keeps Nunjucks assignment and filter expressions readable', async () => {
     const source = '{% set items = [1, 2, 3] %}{{ items | join(", ") }}';

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+- Improved formatting for large Nunjucks macro/function calls with object and array literals.
+- Added stable formatting for multiline Nunjucks function-call arguments.
+- Normalized indentation inside multiline quoted strings in Nunjucks expressions to keep output idempotent.
+- Preserved CDATA sections without re-indenting their content on repeated formatting.
+- Preserved very large minified CSS `<style>` blocks instead of invoking embedded CSS formatting when it is not idempotent.
+- Expanded OSS corpus validation to 1,125 real-world `.njk` / `.nunjucks` files across 13 public projects, with 0 crashes and 0 non-idempotent files.
+
 ## 0.1.0
 
 - Initial Nunjucks Prettier plugin.

@@ -235,9 +235,10 @@ function parseChildren(
       if (text.startsWith('<!', pos) && !text.startsWith('<!--', pos)) {
         const closeIdx = text.indexOf('>', pos + 2);
         const end = closeIdx >= 0 ? closeIdx + 1 : text.length;
+        const isCdata = text.startsWith('<![CDATA[', pos);
         nodes.push(
           withRange(
-            { type: 'TextNode', value: text.slice(pos, end), verbatim: true } as TextNode,
+            { type: 'TextNode', value: text.slice(pos, end), verbatim: true, ...(isCdata ? { preserveWhitespace: true } : {}) } as TextNode,
             rangeOffset + pos,
             rangeOffset + end,
           ),

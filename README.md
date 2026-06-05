@@ -259,7 +259,7 @@ npm run build
 npm run corpus:oss
 ```
 
-The OSS corpus currently covers Nunjucks templates from 11ty's base blog, Mozilla's Nunjucks repository, and GOV.UK Frontend. The check formats each file twice and fails on crashes or non-idempotent output.
+The OSS corpus currently covers 1,125 real-world Nunjucks templates across 13 public projects, including web.dev, 11ty, Jamstack, A11Y Project, Mozilla Nunjucks, GOV.UK Frontend, and GOV.UK Design System. The check formats each file twice and fails on crashes or non-idempotent output.
 
 ## Maintainer Release
 
