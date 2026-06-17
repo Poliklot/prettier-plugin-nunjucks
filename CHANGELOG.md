@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.3...prettier-plugin-nunjucks-v0.1.4) (2026-06-17)
+
+
+### Bug Fixes
+
+* keep long Nunjucks logical chains multiline ([27c3b87](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/27c3b874d32944fddf5edccb2184de425cfed403))
+
 ## 0.1.2
 
 - Kept multiline Nunjucks variable calls inline with their delimiters, e.g. `{{ render_component({ ... }) }}`, while still normalizing nested object and array indentation.
