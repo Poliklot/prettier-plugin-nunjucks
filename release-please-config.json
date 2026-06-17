@@ -1,0 +1,10 @@
+{
+  "bootstrap-sha": "491f6966f691f7d0bbfacdd63d7e29ac933b98d3",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "prettier-plugin-nunjucks",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}
