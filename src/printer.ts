@@ -1155,7 +1155,7 @@ function printAttribute(attr: ElementAttribute, options: ParserOptions): Doc {
 
   if (!isPlainAttribute(attr)) {
     if ((attr.block as Node).type === 'BlockStatement') {
-      return printAttributeBlock(attr.block as BlockStatement);
+      return printAttributeBlock(attr.block as BlockStatement, options);
     }
 
     if ((attr.block as Node).type === 'CommentStatement') {
@@ -1228,8 +1228,8 @@ function printAttribute(attr: ElementAttribute, options: ParserOptions): Doc {
   return concat([attr.name, '=', quote, escapeAttributeValue(valueString, quote), quote]);
 }
 
-function printAttributeBlock(block: BlockStatement): Doc {
-  const open = printBlockOpen(block);
+function printAttributeBlock(block: BlockStatement, options: ParserOptions): Doc {
+  const open = printBlockOpen(block, options);
   const bodyLines = formatAttributeBlockBody(stringifyNode(block.program as Program));
   const body =
     bodyLines.length > 0 ? concat([indent(concat([hardline, join(hardline, bodyLines)])), hardline]) : hardline;
@@ -1239,7 +1239,7 @@ function printAttributeBlock(block: BlockStatement): Doc {
     const branchLines = formatAttributeBlockBody(stringifyNode(branch.program as Program));
     const branchBody =
       branchLines.length > 0 ? concat([indent(concat([hardline, join(hardline, branchLines)])), hardline]) : hardline;
-    inverseParts.push(concat([printElseBranchOpen(branch), branchBody]));
+    inverseParts.push(concat([printElseBranchOpen(branch, options), branchBody]));
   });
 
   if (block.inverse.body.length > 0) {
@@ -2069,6 +2069,10 @@ function printMustache(node: MustacheStatement, options: ParserOptions): Doc {
   const inlineContent = expressionToDoc(content);
   const { open, close } = getTemplateTagDelimiters(node.triple);
 
+  if (node.triple && content.includes('\n')) {
+    return printMultilineStatementTag(node, content, open, close);
+  }
+
   if (!node.triple && content.includes('\n')) {
     return printInlineMultilineMustache(node, content, open, close);
   }
@@ -2082,6 +2086,29 @@ function printMustache(node: MustacheStatement, options: ParserOptions): Doc {
     closePadding: getMustacheClosePadding(node, content),
     multiline: !node.triple && !content.includes('\n') && shouldPrintCallableMultiline(node, content, options, true),
   });
+}
+
+function printMultilineStatementTag(
+  node: MustacheStatement,
+  content: string,
+  open: string,
+  close: string,
+): Doc {
+  const lines = splitMultilineExpression(content) ?? content.split('\n');
+  const [firstLine, ...restLines] = lines;
+
+  return group(
+    concat([
+      open,
+      getTrimOpen(node),
+      getMustacheOpenPadding(node, content),
+      firstLine,
+      indent(concat([hardline, join(hardline, restLines)])),
+      hardline,
+      getTrimClose(node),
+      close,
+    ]),
+  );
 }
 
 function printInlineMultilineMustache(
@@ -2126,7 +2153,7 @@ function printBlock(path: AstPath<BlockStatement>, options: ParserOptions, print
     return stringifyNode(node as Node);
   }
 
-  const open = printBlockOpen(node);
+  const open = printBlockOpen(node, options);
   const bodyDocs: Doc[] = [];
   path.call((programPath) => {
     programPath.each((childPath) => {
@@ -2164,7 +2191,7 @@ function printBlock(path: AstPath<BlockStatement>, options: ParserOptions, print
     }, 'inverseChain', index, 'program');
 
     const branchBody = printBlockBody(branch.program.body as Node[], branchDocs, options);
-    inverseParts.push(concat([printElseBranchOpen(branch), branchBody]));
+    inverseParts.push(concat([printElseBranchOpen(branch, options), branchBody]));
   });
 
   if (node.inverse.body.length > 0) {
@@ -2192,8 +2219,8 @@ function printBlock(path: AstPath<BlockStatement>, options: ParserOptions, print
   return concat([open, body, inverse, close]);
 }
 
-function printBlockOpen(node: BlockStatement): Doc {
-  const expression = buildExpression(node);
+function printBlockOpen(node: BlockStatement, options: ParserOptions): Doc {
+  const expression = buildExpression(node, options);
   const prefix = getBlockPrefix(node);
   const printedPrefix = getPrintedBlockPrefix(prefix);
 
@@ -2247,8 +2274,8 @@ function buildBranchTagContent(keyword: string, expression: string): string {
   return expression.length > 0 ? `${keyword} ${expression}` : keyword;
 }
 
-function printElseBranchOpen(node: ElseBranch): Doc {
-  const expression = buildExpression(node);
+function printElseBranchOpen(node: ElseBranch, options: ParserOptions): Doc {
+  const expression = buildExpression(node, options);
   const keyword = node.branchKeyword ?? 'elif';
 
   return printExpressionTag(`${keyword} `, expression, node);
@@ -2468,6 +2495,10 @@ function expressionToDoc(expression: string): Doc {
 function shouldFormatNunjucksRawExpression(expression: string, options: ParserOptions): boolean {
   const trimmed = expression.trim();
 
+  if (shouldFormatLogicalChainExpression(trimmed, options)) {
+    return true;
+  }
+
   if (!/[{\[(]/.test(trimmed)) {
     return false;
   }
@@ -2500,6 +2531,11 @@ function formatNunjucksRawExpression(expression: string, options: ParserOptions)
   }
 
   const source = expression.trim();
+  const logicalChain = formatLogicalChainExpression(source, options);
+  if (logicalChain) {
+    return logicalChain;
+  }
+
   const indentUnit = getIndentUnit(options);
   const lines: string[] = [];
   const stack: Array<{ opener: string; indent: number }> = [];
@@ -2617,6 +2653,99 @@ function formatNunjucksRawExpression(expression: string, options: ParserOptions)
   }
 
   return lines.join('\n');
+}
+
+function shouldFormatLogicalChainExpression(expression: string, options: ParserOptions): boolean {
+  return (
+    expression.length > getPrintWidth(options) &&
+    /\s(?:and|or)\s/.test(expression) &&
+    !/[{}[\]()]/.test(expression) &&
+    splitLogicalChainExpression(expression).length > 1
+  );
+}
+
+function formatLogicalChainExpression(expression: string, options: ParserOptions): string | null {
+  if (!shouldFormatLogicalChainExpression(expression, options)) {
+    return null;
+  }
+
+  return splitLogicalChainExpression(expression).join('\n');
+}
+
+function splitLogicalChainExpression(expression: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | '`' | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < expression.length; index += 1) {
+    const char = expression[index];
+
+    if (quote) {
+      current += char;
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === quote) {
+        quote = null;
+      }
+
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    const logicalOperator = readLogicalOperatorAt(expression, index);
+    if (logicalOperator && current.trim().length > 0) {
+      parts.push(current.trimEnd());
+      current = logicalOperator;
+      index += logicalOperator.length - 1;
+
+      while (index + 1 < expression.length && /\s/.test(expression[index + 1])) {
+        index += 1;
+      }
+
+      current += ' ';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim().length > 0) {
+    parts.push(current.trim());
+  }
+
+  return parts;
+}
+
+function readLogicalOperatorAt(expression: string, index: number): 'and' | 'or' | null {
+  const previous = index === 0 ? '' : expression[index - 1];
+  if (previous && !/\s/.test(previous)) {
+    return null;
+  }
+
+  if (expression.startsWith('and', index) && /\s/.test(expression[index + 3] ?? '')) {
+    return 'and';
+  }
+
+  if (expression.startsWith('or', index) && /\s/.test(expression[index + 2] ?? '')) {
+    return 'or';
+  }
+
+  return null;
 }
 
 function formatMultilineAttributeValue(value: string): Doc[] {

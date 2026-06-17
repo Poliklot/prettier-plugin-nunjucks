@@ -203,6 +203,37 @@ describe('prettier-plugin-nunjucks formatting', () => {
     assert.equal(await format(output), output);
   });
 
+  it('keeps long Nunjucks set logical chains readable', async () => {
+    const source = `{% set has_scene_styles = scene_width
+    or scene_height
+    or scene_scale
+    or scene_small_desktop_scale
+    or scene_laptop_scale
+    or scene_tablet_scale
+    or scene_mobile_scale
+    or scene_origin_x
+    or scene_origin_y
+  %}`;
+    const output = await format(source);
+
+    assert.equal(
+      output,
+      `{% set has_scene_styles = scene_width
+  or scene_height
+  or scene_scale
+  or scene_small_desktop_scale
+  or scene_laptop_scale
+  or scene_tablet_scale
+  or scene_mobile_scale
+  or scene_origin_x
+  or scene_origin_y
+%}
+`,
+    );
+    assert.equal(output.includes('scene_width or scene_height or scene_scale'), false);
+    assert.equal(await format(output), output);
+  });
+
   it('keeps single statement tags as statement tags', async () => {
     const output = await format('{% extends "base.njk" %}{% set username = "joe" %}<p>{{ username }}</p>');
     assert.equal(output.includes('{% extends "base.njk" %}'), true);
