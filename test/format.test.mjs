@@ -239,4 +239,50 @@ describe('prettier-plugin-nunjucks formatting', () => {
     assert.equal(output.includes('{% extends "base.njk" %}'), true);
     assert.equal(output.includes('{% set username = "joe" %}'), true);
   });
+
+  it('preserves leading frontmatter exactly while formatting the template body', async () => {
+    const source = `---
+title:  My Page
+tags:
+  - zeta
+  - alpha
+---
+<div>{{user.name}}</div>
+`;
+    const output = await format(source);
+
+    assert.equal(
+      output,
+      `---
+title:  My Page
+tags:
+  - zeta
+  - alpha
+---
+<div>{{ user.name }}</div>
+`,
+    );
+    assert.equal(await format(output), output);
+  });
+
+  it('preserves explicit-language frontmatter fences exactly', async () => {
+    const source = `---toml
+title = "Home"
+draft = true
+---
+{{user.name}}
+`;
+    const output = await format(source);
+
+    assert.equal(
+      output,
+      `---toml
+title = "Home"
+draft = true
+---
+{{ user.name }}
+`,
+    );
+    assert.equal(await format(output), output);
+  });
 });

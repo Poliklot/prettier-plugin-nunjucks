@@ -32,4 +32,18 @@ describe('nunjucks parser', () => {
     assert.equal(block.inverse.body[0].type, 'ElementNode');
     assert.equal(block.inverse.body[0].tag, 'p');
   });
+
+  it('parses leading frontmatter as a dedicated node', () => {
+    const ast = parse('---toml\ntitle = "Home"\n---\n<p>{{ user }}</p>');
+    const frontmatter = ast.body[0];
+    const element = ast.body[1];
+
+    assert.equal(frontmatter.type, 'FrontmatterNode');
+    assert.equal(frontmatter.language, 'toml');
+    assert.equal(frontmatter.explicitLanguage, 'toml');
+    assert.equal(frontmatter.startDelimiter, '---');
+    assert.equal(frontmatter.endDelimiter, '---');
+    assert.equal(frontmatter.raw, '---toml\ntitle = "Home"\n---');
+    assert.equal(element.type, 'ElementNode');
+  });
 });
