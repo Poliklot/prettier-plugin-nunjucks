@@ -1,37 +1,21 @@
-export interface FrontMatter {
-  type: 'FrontmatterNode';
-  raw: string;
-  value: string;
-  language: string;
-  explicitLanguage: string | null;
-  startDelimiter: '---' | '+++';
-  endDelimiter: '---' | '+++' | '...';
-  end: {
-    index: number;
-  };
-}
+import type { FrontmatterNode } from './types';
+
+type FrontmatterNodeData = Omit<FrontmatterNode, 'range'>;
 
 export interface ParsedFrontMatter {
-  frontMatter?: FrontMatter;
-  content: string;
+  node: FrontmatterNodeData;
+  endIndex: number;
+}
+
+interface ClosingDelimiter {
+  delimiter: FrontmatterNode['endDelimiter'];
+  startIndex: number;
+  endIndex: number;
 }
 
 const delimiterLength = 3;
 
-export function parseFrontMatter(text: string): ParsedFrontMatter {
-  const frontMatter = getFrontMatter(text);
-
-  if (!frontMatter) {
-    return { content: text };
-  }
-
-  return {
-    frontMatter,
-    content: text,
-  };
-}
-
-function getFrontMatter(text: string): FrontMatter | undefined {
+export function parseFrontMatter(text: string): ParsedFrontMatter | undefined {
   const start = text.startsWith('\uFEFF') ? 1 : 0;
   const startDelimiter = text.slice(start, start + delimiterLength);
 
@@ -45,39 +29,75 @@ function getFrontMatter(text: string): FrontMatter | undefined {
   }
 
   const explicitLanguage = text.slice(start + delimiterLength, firstLineBreakIndex).trim();
-  let endDelimiterIndex = text.indexOf(`\n${startDelimiter}`, firstLineBreakIndex);
+  const language = explicitLanguage || (startDelimiter === '+++' ? 'toml' : 'yaml');
+  const closingDelimiter = findClosingDelimiter(
+    text,
+    firstLineBreakIndex + 1,
+    getAllowedEndDelimiters(startDelimiter, language),
+  );
 
-  let language = explicitLanguage;
-  if (!language) {
-    language = startDelimiter === '+++' ? 'toml' : 'yaml';
-  }
-
-  if (endDelimiterIndex === -1 && startDelimiter === '---' && language === 'yaml') {
-    endDelimiterIndex = text.indexOf('\n...', firstLineBreakIndex);
-  }
-
-  if (endDelimiterIndex === -1) {
+  if (!closingDelimiter) {
     return;
   }
 
-  const frontMatterEndIndex = endDelimiterIndex + 1 + delimiterLength;
-  const nextCharacter = text.charAt(frontMatterEndIndex + 1);
-  if (!/\s?/.test(nextCharacter)) {
-    return;
-  }
-
-  const raw = text.slice(0, frontMatterEndIndex);
+  const raw = text.slice(0, closingDelimiter.endIndex);
 
   return {
-    type: 'FrontmatterNode',
-    raw,
-    value: text.slice(firstLineBreakIndex + 1, endDelimiterIndex),
-    language,
-    explicitLanguage: explicitLanguage || null,
-    startDelimiter,
-    endDelimiter: raw.endsWith('...') ? '...' : (startDelimiter as '---' | '+++'),
-    end: {
-      index: raw.length,
+    node: {
+      type: 'FrontmatterNode',
+      raw,
+      value: text.slice(firstLineBreakIndex + 1, closingDelimiter.startIndex),
+      language,
+      explicitLanguage: explicitLanguage || null,
+      startDelimiter,
+      endDelimiter: closingDelimiter.delimiter,
     },
+    endIndex: closingDelimiter.endIndex,
   };
+}
+
+function getAllowedEndDelimiters(
+  startDelimiter: FrontmatterNode['startDelimiter'],
+  language: string,
+): Set<FrontmatterNode['endDelimiter']> {
+  const delimiters = new Set<FrontmatterNode['endDelimiter']>([startDelimiter]);
+  const normalizedLanguage = language.toLowerCase();
+
+  if (startDelimiter === '---' && (normalizedLanguage === 'yaml' || normalizedLanguage === 'yml')) {
+    delimiters.add('...');
+  }
+
+  return delimiters;
+}
+
+function findClosingDelimiter(
+  text: string,
+  startIndex: number,
+  allowedDelimiters: Set<FrontmatterNode['endDelimiter']>,
+): ClosingDelimiter | undefined {
+  let lineStart = startIndex;
+
+  while (lineStart <= text.length) {
+    const nextLineBreak = text.indexOf('\n', lineStart);
+    const lineEnd = nextLineBreak === -1 ? text.length : nextLineBreak;
+    const line = text.slice(lineStart, lineEnd);
+    const match = line.match(/^(---|\+\+\+|\.\.\.)[\t ]*\r?$/);
+    const delimiter = match?.[1] as FrontmatterNode['endDelimiter'] | undefined;
+
+    if (delimiter && allowedDelimiters.has(delimiter)) {
+      return {
+        delimiter,
+        startIndex: lineStart,
+        endIndex: lineEnd,
+      };
+    }
+
+    if (nextLineBreak === -1) {
+      return;
+    }
+
+    lineStart = nextLineBreak + 1;
+  }
+
+  return;
 }

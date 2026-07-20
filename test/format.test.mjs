@@ -247,6 +247,7 @@ tags:
   - zeta
   - alpha
 ---
+
 <div>{{user.name}}</div>
 `;
     const output = await format(source);
@@ -259,6 +260,7 @@ tags:
   - zeta
   - alpha
 ---
+
 <div>{{ user.name }}</div>
 `,
     );
@@ -282,6 +284,53 @@ draft = true
 ---
 {{ user.name }}
 `,
+    );
+    assert.equal(await format(output), output);
+  });
+
+  it('requires YAML frontmatter fences to occupy complete lines', async () => {
+    const source = `---
+---oops: value
++++oops: value
+...oops: value
+title: "{{ page.title }}"
+---
+<div>{{user.name}}</div>
+`;
+    const output = await format(source);
+
+    assert.equal(
+      output,
+      `---
+---oops: value
++++oops: value
+...oops: value
+title: "{{ page.title }}"
+---
+<div>{{ user.name }}</div>
+`,
+    );
+    assert.equal(await format(output), output);
+  });
+
+  it('supports TOML frontmatter fences without accepting delimiter prefixes', async () => {
+    const source = ['+++', 'title = "Home"', '+++oops', '+++  ', '{{user.name}}', ''].join('\n');
+    const output = await format(source);
+
+    assert.equal(
+      output,
+      ['+++', 'title = "Home"', '+++oops', '+++', '{{ user.name }}', ''].join('\n'),
+    );
+    assert.equal(await format(output), output);
+  });
+
+  it('supports the YAML document-end frontmatter fence', async () => {
+    const source = ['---yml', 'title: Home', '...oops: value', '...  ', '{{user.name}}', ''].join('\n');
+    const output = await format(source);
+
+    assert.equal(
+      output,
+      ['---yml', 'title: Home', '...oops: value', '...', '{{ user.name }}', ''].join('\n'),
     );
     assert.equal(await format(output), output);
   });

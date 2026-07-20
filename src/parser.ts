@@ -61,11 +61,11 @@ export function parse(text: string, options: NunjucksParserOptions = {}): Progra
   try {
     const normalizedText = normalizeInput(text);
     const preservedNodes: Node[] = [];
-    const { frontMatter } = parseFrontMatter(normalizedText);
-    const startPosition = frontMatter?.end.index ?? 0;
+    const frontMatter = parseFrontMatter(normalizedText);
+    const startPosition = frontMatter?.endIndex ?? 0;
 
     if (frontMatter) {
-      preservedNodes.push(createFrontmatterNode(frontMatter, 0, frontMatter.end.index));
+      preservedNodes.push(createFrontmatterNode(frontMatter.node, 0, frontMatter.endIndex));
     }
 
     const { nodes } = parseChildren(normalizedText, startPosition, null, null);

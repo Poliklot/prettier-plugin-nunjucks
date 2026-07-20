@@ -44,6 +44,27 @@ describe('nunjucks parser', () => {
     assert.equal(frontmatter.startDelimiter, '---');
     assert.equal(frontmatter.endDelimiter, '---');
     assert.equal(frontmatter.raw, '---toml\ntitle = "Home"\n---');
+    assert.equal(Object.hasOwn(frontmatter, 'end'), false);
     assert.equal(element.type, 'ElementNode');
+  });
+
+  it('does not recognize a closing frontmatter delimiter with same-line content', () => {
+    const ast = parse('---\ntitle: Home\n---<p>{{ user }}</p>');
+
+    assert.notEqual(ast.body[0].type, 'FrontmatterNode');
+  });
+
+  it('records TOML and YAML document-end fences including trailing whitespace', () => {
+    const toml = parse('+++\ntitle = "Home"\n+++  \n<p>Home</p>').body[0];
+    const yaml = parse('---yaml\ntitle: Home\n...  \n<p>Home</p>').body[0];
+
+    assert.equal(toml.type, 'FrontmatterNode');
+    assert.equal(toml.startDelimiter, '+++');
+    assert.equal(toml.endDelimiter, '+++');
+    assert.equal(toml.raw, '+++\ntitle = "Home"\n+++  ');
+    assert.equal(yaml.type, 'FrontmatterNode');
+    assert.equal(yaml.language, 'yaml');
+    assert.equal(yaml.endDelimiter, '...');
+    assert.equal(yaml.raw, '---yaml\ntitle: Home\n...  ');
   });
 });
