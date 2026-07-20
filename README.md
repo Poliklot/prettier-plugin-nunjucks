@@ -213,6 +213,7 @@ async function run(source) {
 - multiline class formatting with conditional modifiers and whitespace-control blocks
 - embedded JavaScript / CSS formatting for plain `script` / `style` tags when the content is safe to parse
 - raw `script` / `style` preservation when content contains Nunjucks or non-JS/CSS types
+- leading YAML, TOML, and explicit-language front matter preserved without formatting its contents
 - custom extension block/fork tags via `blockTags`, `inlineTags`, and `forkTags`
 - incomplete/unmatched template structures preserved as raw nodes instead of crashing
 

@@ -6,6 +6,7 @@ export type Node =
   | Program
   | ElementNode
   | TextNode
+  | FrontmatterNode
   | MustacheStatement
   | BlockStatement
   | PartialStatement
@@ -62,6 +63,16 @@ export interface TextNode extends SourceRange {
   preserveWhitespace?: boolean;
   leadingWhitespace?: string;
   trailingWhitespace?: string;
+}
+
+export interface FrontmatterNode extends SourceRange {
+  type: 'FrontmatterNode';
+  raw: string;
+  value: string;
+  language: string;
+  explicitLanguage: string | null;
+  startDelimiter: '---' | '+++';
+  endDelimiter: '---' | '+++' | '...';
 }
 
 export interface HashPair {

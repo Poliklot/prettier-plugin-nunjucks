@@ -8,6 +8,7 @@ import {
   ElementAttribute,
   ElementNode,
   ElseBranch,
+  FrontmatterNode,
   HashPair,
   MustacheStatement,
   Node,
@@ -164,7 +165,7 @@ export const printer: Printer<Node> = {
     return node?.type === 'CommentStatement' && hasCommentDirective(node as CommentStatement, 'prettier-ignore');
   },
   canAttachComment(node) {
-    return node.type !== 'CommentStatement' && node.type !== 'UnmatchedNode';
+    return node.type !== 'CommentStatement' && node.type !== 'UnmatchedNode' && node.type !== 'FrontmatterNode';
   },
   isBlockComment(node) {
     return node.type === 'CommentStatement' && ((node as CommentStatement).block || (node as CommentStatement).multiline);
@@ -245,6 +246,8 @@ export const printer: Printer<Node> = {
           return extraHardlines > 0 ? concat(new Array(extraHardlines).fill(hardline)) : '';
         }
         return node.value.replace(/\s+/g, ' ').trim();
+      case 'FrontmatterNode':
+        return (node as FrontmatterNode).raw;
       case 'MustacheStatement':
         return printMustache(node, options);
       case 'DecoratorStatement':

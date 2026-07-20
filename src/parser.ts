@@ -4,6 +4,7 @@ import {
   ElementAttribute,
   ElementNode,
   TextNode,
+  FrontmatterNode,
   MustacheStatement,
   BlockStatement,
   ElseBranch,
@@ -20,6 +21,7 @@ import type { TemplateToken as CoreTemplateToken } from 'template-format-core';
 type MustacheToken = CoreTemplateToken & { branchKeyword?: string };
 import { whitespace } from 'template-format-core';
 import { nunjucksDialect } from './dialects/nunjucks/tokens';
+import { parseFrontMatter } from './front-matter';
 
 export { locEnd, locStart };
 
@@ -58,8 +60,16 @@ export function parse(text: string, options: NunjucksParserOptions = {}): Progra
 
   try {
     const normalizedText = normalizeInput(text);
-    const { nodes } = parseChildren(normalizedText, 0, null, null);
-    return withRange({ type: 'Program', body: nodes }, 0, normalizedText.length);
+    const preservedNodes: Node[] = [];
+    const frontMatter = parseFrontMatter(normalizedText);
+    const startPosition = frontMatter?.endIndex ?? 0;
+
+    if (frontMatter) {
+      preservedNodes.push(createFrontmatterNode(frontMatter.node, 0, frontMatter.endIndex));
+    }
+
+    const { nodes } = parseChildren(normalizedText, startPosition, null, null);
+    return withRange({ type: 'Program', body: [...preservedNodes, ...nodes] }, 0, normalizedText.length);
   } finally {
     activeCustomTagConfig = previousCustomTagConfig;
   }
@@ -734,6 +744,10 @@ function consumeNextNode(text: string, position: number): number {
 
 function createUnmatchedNode(text: string, start: number, end: number): UnmatchedNode {
   return withRange({ type: 'UnmatchedNode', raw: text.slice(start, end) }, start, end);
+}
+
+function createFrontmatterNode(node: Omit<FrontmatterNode, 'range'>, start: number, end: number): FrontmatterNode {
+  return withRange(node, start, end);
 }
 
 function parseTag(text: string, position: number):
