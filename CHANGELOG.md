@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.4...prettier-plugin-nunjucks-v0.1.5) (2026-07-20)
+
+
+### Bug Fixes
+
+* preserve front matter blocks ([#11](https://github.com/Poliklot/prettier-plugin-nunjucks/issues/11)) ([75bbabd](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/75bbabdad304a27735a287bedc30626a20754e94))
+
 ## [0.1.4](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.3...prettier-plugin-nunjucks-v0.1.4) (2026-06-17)
 
 
