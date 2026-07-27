@@ -1,6 +1,6 @@
 {
   "name": "prettier-plugin-nunjucks",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Prettier plugin for Nunjucks templates (.njk, .nunjucks, .nunj)",
   "license": "MIT",
   "type": "commonjs",
@@ -56,9 +56,9 @@
     "prepublishOnly": "npm run check"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
-    "prettier": "^3.2.0",
-    "typescript": "^6.0.3"
+    "@types/node": "^26.1.2",
+    "prettier": "^3.9.6",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "prettier": ">=3.0.0"

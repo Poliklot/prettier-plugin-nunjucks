@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.6](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.5...prettier-plugin-nunjucks-v0.1.6) (2026-07-27)
+
+### Bug Fixes
+
+* update TypeScript, Prettier, and Node.js development types
+
 ## [0.1.5](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.4...prettier-plugin-nunjucks-v0.1.5) (2026-07-20)
 
 
