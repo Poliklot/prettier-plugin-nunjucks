@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.6...prettier-plugin-nunjucks-v0.1.7) (2026-07-28)
+
+
+### Bug Fixes
+
+* **ci:** support trusted manual npm publishing ([fe00e80](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/fe00e80a5905318aa7861a8e587b19c9d00c7199))
+
 ## [0.1.6](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.5...prettier-plugin-nunjucks-v0.1.6) (2026-07-27)
 
 ### Bug Fixes
