@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.8](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.7...prettier-plugin-nunjucks-v0.1.8) (2026-08-11)
+
+
+### Bug Fixes
+
+* **ci:** support trusted manual npm publishing ([fe00e80](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/fe00e80a5905318aa7861a8e587b19c9d00c7199))
+* **deps-dev:** update development dependencies ([99f7ba2](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/99f7ba2bdd0d695d99cead0e56ef8c9c8ba2f505))
+* keep long Nunjucks logical chains multiline ([27c3b87](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/27c3b874d32944fddf5edccb2184de425cfed403))
+* preserve front matter blocks ([#11](https://github.com/Poliklot/prettier-plugin-nunjucks/issues/11)) ([75bbabd](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/75bbabdad304a27735a287bedc30626a20754e94))
+
 ## [0.1.7](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.6...prettier-plugin-nunjucks-v0.1.7) (2026-08-11)
 
 
