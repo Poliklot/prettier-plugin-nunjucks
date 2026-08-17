@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.7...prettier-plugin-nunjucks-v0.2.0) (2026-08-17)
+
+
+### Features
+
+* add single-line class attribute layout ([#20](https://github.com/Poliklot/prettier-plugin-nunjucks/issues/20)) ([d4acaa8](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/d4acaa87547a215d6f0af8b56d5e5f4daafdca1c))
+
 ## [0.1.7](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.6...prettier-plugin-nunjucks-v0.1.7) (2026-08-11)
 
 
