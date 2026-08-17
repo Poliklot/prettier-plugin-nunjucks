@@ -123,6 +123,21 @@ module.exports = {
 };
 ```
 
+### `classAttributeLayout`
+
+Control whether `class` attribute values may use multiple physical lines. The default `auto` mode preserves the existing formatting rules. Use `single-line` to keep static and conditional class values on one line; the surrounding HTML tag may still wrap.
+
+| Default | CLI Override | API Override |
+| --- | --- | --- |
+| `"auto"` | `--class-attribute-layout <auto\|single-line>` | `classAttributeLayout: "auto" \| "single-line"` |
+
+```json
+{
+  "plugins": ["prettier-plugin-nunjucks"],
+  "classAttributeLayout": "single-line"
+}
+```
+
 ### Custom extension tags
 
 Nunjucks extensions can define project-specific tags. Unknown single statement tags are preserved by default; tags that behave like blocks or branches can be configured explicitly.

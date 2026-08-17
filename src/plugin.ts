@@ -51,6 +51,23 @@ export const options = {
     default: [{ value: [] }],
     description: 'Additional Nunjucks statement tags that should be parsed as branch/fork tags inside custom blocks.',
   },
+  classAttributeLayout: {
+    since: '0.2.0',
+    category: 'HTML',
+    type: 'choice',
+    default: 'auto',
+    description: 'Control whether class attribute values may use multiple lines.',
+    choices: [
+      {
+        value: 'auto',
+        description: 'Wrap long and conditional class attributes using the default formatting rules.',
+      },
+      {
+        value: 'single-line',
+        description: 'Keep class attribute values on a single physical line.',
+      },
+    ],
+  },
 };
 export const defaultOptions = {};
 

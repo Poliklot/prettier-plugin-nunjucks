@@ -71,6 +71,53 @@ describe('prettier-plugin-nunjucks formatting', () => {
     assert.equal(output.includes('{{ user.name }}'), true);
   });
 
+  it('keeps long static class attributes on one line when configured', async () => {
+    const source =
+      '<div class="container m-auto flex items-center justify-between gap-2 rounded-2xl bg-white px-8 py-4 shadow-md dark:bg-stone-900"></div>';
+    const defaultOutput = await format(source);
+    const output = await format(source, { classAttributeLayout: 'single-line' });
+
+    assert.equal(defaultOutput.includes('class="\n'), true);
+    assert.equal(
+      output,
+      `<div
+  class="container m-auto flex items-center justify-between gap-2 rounded-2xl bg-white px-8 py-4 shadow-md dark:bg-stone-900"
+></div>
+`,
+    );
+    assert.equal(await format(output, { classAttributeLayout: 'single-line' }), output);
+  });
+
+  it('compacts conditional classes without changing whitespace-control semantics', async () => {
+    const source =
+      '<div class="govuk-fieldset {%- if params.classes %} {{ params.classes }}{% endif %}"></div>';
+    const output = await format(source, { classAttributeLayout: 'single-line' });
+
+    assert.equal(
+      output,
+      `<div
+  class="govuk-fieldset {%- if params.classes %} {{ params.classes }}{% endif %}"
+></div>
+`,
+    );
+    assert.equal(await format(output, { classAttributeLayout: 'single-line' }), output);
+  });
+
+  it('keeps dynamic class fragments glued and honors singleQuote', async () => {
+    const source = '<div class="bg-{{color}} {% if large %}size-{{size}}{% endif %}"></div>';
+    const options = { classAttributeLayout: 'single-line', singleQuote: true };
+    const output = await format(source, options);
+
+    assert.equal(
+      output,
+      `<div
+  class='bg-{{ color }} {% if large %}size-{{ size }}{% endif %}'
+></div>
+`,
+    );
+    assert.equal(await format(output, options), output);
+  });
+
   it('formats asyncEach and asyncAll blocks', async () => {
     const each = await format('{% asyncEach item in items %}<span>{{item.id}}</span>{% endeach %}');
     assert.equal(each.includes('{% asyncEach item in items %}'), true);
