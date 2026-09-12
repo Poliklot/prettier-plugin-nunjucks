@@ -53,10 +53,11 @@
     "format:nunjucks-tree": "node scripts/format-nunjucks-tree.mjs",
     "smoke:install": "node scripts/install-smoke.mjs",
     "pack:check": "node scripts/pack-check.mjs",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "node scripts/check-core-release.mjs && npm run check"
   },
   "devDependencies": {
     "@types/node": "^26.5.0",
+    "nunjucks": "^3.2.4",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2"
   },
@@ -64,6 +65,6 @@
     "prettier": ">=3.0.0"
   },
   "dependencies": {
-    "template-format-core": "^0.1.1"
+    "template-format-core": "git+https://github.com/Poliklot/template-format-core.git#a4c907e5f69edf1444d57caa2c690650e5d197ff"
   }
 }

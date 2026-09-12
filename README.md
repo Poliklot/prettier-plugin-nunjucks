@@ -326,3 +326,7 @@ Run the checks above, then publish from this repository root:
 ```bash
 npm publish --access public
 ```
+
+## Shared embedding work
+
+See [shared embedding architecture and cross-repository dependencies](docs/shared-embedding.md). This source work depends on [the core tracking issue](https://github.com/Poliklot/template-format-core/issues/2).
