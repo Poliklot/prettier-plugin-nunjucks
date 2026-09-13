@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+* Use the published `template-format-core@^0.2.0` registry dependency; no Git integration pin is required.
+
+### Shared embedded-language safety
+
+* Consume shared placeholder/Doc validation and HTML context from `template-format-core`, retaining this plugin's own AST and dialect.
+* Preserve exact raw source on disabled/rejected embedding; preserve required dynamic JS key quotes, expression grouping, literal markers and string whitespace. Some formerly formatted unquoted template fragments now use conservative fallback.
+* See `docs/shared-embedding.md` and Poliklot/template-format-core#2 for the coordinated dependency and release gates.
+
 ## [0.2.0](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.1.7...prettier-plugin-nunjucks-v0.2.0) (2026-08-17)
 
 
