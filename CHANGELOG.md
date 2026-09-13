@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* Use the published `template-format-core@^0.2.0` registry dependency; no Git integration pin is required.
+
 ### Shared embedded-language safety
 
 * Consume shared placeholder/Doc validation and HTML context from `template-format-core`, retaining this plugin's own AST and dialect.
