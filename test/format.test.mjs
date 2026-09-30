@@ -81,8 +81,11 @@ describe('prettier-plugin-nunjucks formatting', () => {
 
   it('preserves spaces after punctuation when a fill separator becomes a newline', async () => {
     const source = '<span class="label">{{ category }}: {{ title | safe }}</span>';
-    const renderText = (template) => nunjucks.renderString(template, { category: 'News', title: 'Title' })
-      .replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    const renderText = (template) => {
+      const rendered = nunjucks.renderString(template, { category: 'News', title: 'Title' });
+      return rendered.slice(rendered.indexOf('>') + 1, rendered.lastIndexOf('</span>'))
+        .replace(/\s+/g, ' ').trim();
+    };
     for (const printWidth of [30, 40, 60]) {
       const options = { printWidth };
       const output = await format(source, options);
