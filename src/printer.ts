@@ -1380,11 +1380,11 @@ function stringifyInlineChild(node: Node, options?: ParserOptions): string {
 
 function shouldInsertInlineSeparator(left: Node, right: Node): boolean {
   if (left.type === 'TextNode' && hasInlineBoundaryWhitespace((left as TextNode).trailingWhitespace)) {
-    return !isPunctuationOnlyTextNode(left) || !hasLineBreak((left as TextNode).trailingWhitespace);
+    return true;
   }
 
   if (right.type === 'TextNode' && hasInlineBoundaryWhitespace((right as TextNode).leadingWhitespace)) {
-    return !isPunctuationOnlyTextNode(right) || !hasLineBreak((right as TextNode).leadingWhitespace);
+    return true;
   }
 
   if (isPunctuationOnlyTextNode(left) || isPunctuationOnlyTextNode(right)) {

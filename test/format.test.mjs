@@ -79,6 +79,18 @@ describe('prettier-plugin-nunjucks formatting', () => {
     assert.equal(await format(output, options), output);
   });
 
+  it('preserves spaces after punctuation when a fill separator becomes a newline', async () => {
+    const source = '<span class="label">{{ category }}: {{ title | safe }}</span>';
+    const renderText = (template) => nunjucks.renderString(template, { category: 'News', title: 'Title' })
+      .replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    for (const printWidth of [30, 40, 60]) {
+      const options = { printWidth };
+      const output = await format(source, options);
+      assert.equal(renderText(output), 'News: Title');
+      assert.equal(await format(output, options), output);
+    }
+  });
+
   it('does not split unbreakable words or non-breaking-space entities', async () => {
     const longWord = 'x'.repeat(100);
     const output = await format(`<p>Before ${longWord} two&nbsp;words after</p>`, { printWidth: 30 });
