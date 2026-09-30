@@ -29,7 +29,7 @@ import {
 import { normalizeInlineText, stripCommonIndent, trimSurroundingBlankLines } from 'template-format-core';
 import { nunjucksDialect } from './dialects/nunjucks/tokens';
 
-const { hardline, join, group, indent, align, line, softline, ifBreak, lineSuffix, lineSuffixBoundary } = builders;
+const { hardline, join, group, fill, indent, align, line, softline, ifBreak, lineSuffix, lineSuffixBoundary } = builders;
 const { willBreak } = utils;
 const concat = (builders as unknown as { concat: (parts: Doc[]) => Doc }).concat;
 const templateDialect = nunjucksDialect;
@@ -220,7 +220,7 @@ export const printer: Printer<Node> = {
           const extraHardlines = allowedBlankLines - 1;
           return extraHardlines > 0 ? concat(new Array(extraHardlines).fill(hardline)) : '';
         }
-        return node.value.replace(/\s+/g, ' ').trim();
+        return fill(join(line, normalizeInlineText(node.value).split(' ')));
       case 'FrontmatterNode':
         return (node as FrontmatterNode).raw;
       case 'MustacheStatement':
@@ -882,7 +882,12 @@ function printElement(path: AstPath<ElementNode>, options: ParserOptions, print:
   }
 
   if (shouldPreserveSimpleInlineText(node, childrenDocs, mustacheInsideBlock)) {
-    return stringifySimpleInlineElement(node, sortedAttributes, options);
+    const contents = joinInlineChildren(node.children, childrenDocs);
+    const last = contents.parts.length - 1;
+    // Wrap only existing spaces; do not introduce whitespace at inline tag
+    // boundaries. Include the closing tag in the final word's width.
+    contents.parts[last] = concat([contents.parts[last], closeDoc]);
+    return concat([openDoc, indent(contents)]);
   }
 
   const canInlineMixedChildren =
@@ -1393,18 +1398,26 @@ function shouldAttachExpandedChild(left: Node | undefined, right: Node): boolean
   return Boolean(left) && (isPunctuationOnlyTextNode(left) || isPunctuationOnlyTextNode(right));
 }
 
-function joinInlineChildren(nodes: Node[], docs: Doc[]): Doc {
+function joinInlineChildren(nodes: Node[], docs: Doc[]): ReturnType<typeof fill> {
   const parts: Doc[] = [];
 
   docs.forEach((doc, index) => {
-    if (index > 0 && shouldInsertInlineSeparator(nodes[index - 1], nodes[index])) {
-      parts.push(' ');
+    // Keep one fill stream so width calculations include adjacent expressions
+    // and glued punctuation, rather than wrapping each text node in isolation.
+    const childParts = typeof doc === 'object' && doc !== null && !Array.isArray(doc) && doc.type === 'fill'
+      ? doc.parts
+      : [doc];
+    if (index === 0) {
+      parts.push(...childParts);
+    } else if (shouldInsertInlineSeparator(nodes[index - 1], nodes[index])) {
+      parts.push(line, ...childParts);
+    } else {
+      const last = parts.pop() ?? '';
+      parts.push(concat([last, childParts[0] ?? '']), ...childParts.slice(1));
     }
-
-    parts.push(doc);
   });
 
-  return concat(parts);
+  return fill(parts);
 }
 
 function joinExpandedChildren(nodes: Node[], docs: Doc[]): Doc {

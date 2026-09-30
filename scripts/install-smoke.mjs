@@ -30,9 +30,12 @@ try {
   await fs.writeFile(path.join(projectRoot, 'package.json'), `${JSON.stringify({ private: true, type: 'commonjs' }, null, 2)}\n`);
   await fs.writeFile(path.join(projectRoot, '.prettierrc.cjs'), ['module.exports = {', '  plugins: ["prettier-plugin-nunjucks"],', '};', ''].join('\n'));
   await fs.writeFile(path.join(projectRoot, 'sample.njk'), '{% if page_obj.number > 2 %}\n<li class="page-item"><a href="{{ url }}">{{page_obj.number}}</a></li>\n{% endif %}\n\n{% if page_obj.number > 1 %}<li>{{page_obj.number}}</li>{% endif %}');
+  await fs.writeFile(path.join(projectRoot, 'prose.njk'), '<p>Lorem ipsum dolor sit amet consectetur adipisicing elit. Eum laborum quis commodi quia adipisci voluptates, labore, repellat provident inventore excepturi consequatur quos rerum sunt ipsa nostrum, voluptatum molestias corrupti temporibus!</p>');
 
   run(npmCommand, ['install', '--save-dev', `prettier@${prettierVersion}`, path.join(smokeRoot, tarball)], { cwd: projectRoot, env: { npm_config_cache: npmCache } });
   run(path.join(projectRoot, prettierBin), ['--write', 'sample.njk'], { cwd: projectRoot });
+  run(path.join(projectRoot, prettierBin), ['--write', 'prose.njk', '--print-width', '120'], { cwd: projectRoot });
+  run(path.join(projectRoot, prettierBin), ['--check', 'prose.njk', '--print-width', '120'], { cwd: projectRoot });
 
   const formatted = await fs.readFile(path.join(projectRoot, 'sample.njk'), 'utf8');
   if (formatted.includes('{% endif %} {% if page_obj.number > 1 %}')) {
@@ -41,6 +44,16 @@ try {
   }
   if (!formatted.includes('{{ page_obj.number }}')) {
     console.error('Variable spacing was not normalized.');
+    process.exit(1);
+  }
+  const prose = await fs.readFile(path.join(projectRoot, 'prose.njk'), 'utf8');
+  const expectedProse = `<p>
+  Lorem ipsum dolor sit amet consectetur adipisicing elit. Eum laborum quis commodi quia adipisci voluptates, labore,
+  repellat provident inventore excepturi consequatur quos rerum sunt ipsa nostrum, voluptatum molestias corrupti
+  temporibus!
+</p>\n`;
+  if (prose !== expectedProse) {
+    console.error('Paragraph wrapping does not match the issue #32 example.');
     process.exit(1);
   }
   console.log(`Install smoke passed with prettier@${prettierVersion}.`);

@@ -123,6 +123,17 @@ module.exports = {
 };
 ```
 
+### Text wrapping
+
+Normal HTML text wraps at word boundaries to respect `printWidth`, including the
+available width after indentation. Nunjucks variables stay intact, and words or
+punctuation glued to them stay glued. `proseWrap` does not control HTML text
+wrapping, just as with Prettier's HTML printer.
+
+`printWidth` is a target, not a hard limit: unbreakable words, template expressions,
+and whitespace-sensitive content such as `pre`, `textarea`, and raw/verbatim blocks
+may remain longer than it.
+
 ### `classAttributeLayout`
 
 Control whether `class` attribute values may use multiple physical lines. The default `auto` mode preserves the existing formatting rules. Use `single-line` to keep static and conditional class values on one line; the surrounding HTML tag may still wrap.

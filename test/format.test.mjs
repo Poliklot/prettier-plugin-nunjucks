@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import prettier from 'prettier';
+import nunjucks from 'nunjucks';
 import * as plugin from '../dist/plugin.js';
 
 async function format(source, options = {}) {
@@ -14,6 +15,87 @@ async function format(source, options = {}) {
 }
 
 describe('prettier-plugin-nunjucks formatting', () => {
+  const issue32Text =
+    'Lorem ipsum dolor sit amet consectetur adipisicing elit. Eum laborum quis commodi quia adipisci voluptates, labore, repellat provident inventore excepturi consequatur quos rerum sunt ipsa nostrum, voluptatum molestias corrupti temporibus!';
+
+  it('wraps the paragraph from issue #32 exactly like the HTML printer', async () => {
+    const source = `<p>\n  ${issue32Text}\n</p>`;
+    const options = { printWidth: 120 };
+    const output = await format(source, options);
+    assert.equal(output, `<p>
+  Lorem ipsum dolor sit amet consectetur adipisicing elit. Eum laborum quis commodi quia adipisci voluptates, labore,
+  repellat provident inventore excepturi consequatur quos rerum sunt ipsa nostrum, voluptatum molestias corrupti
+  temporibus!
+</p>\n`);
+    assert.equal(output, await prettier.format(source, { parser: 'html', ...options }));
+    assert.equal(await format(output, options), output);
+  });
+
+  for (const printWidth of [40, 80, 120]) {
+    for (const indentation of [{ tabWidth: 2 }, { tabWidth: 4 }, { tabWidth: 4, useTabs: true }]) {
+      it(`wraps nested HTML text at width ${printWidth} with ${JSON.stringify(indentation)}`, async () => {
+        const source = `<main><section><p>${issue32Text}</p></section></main>`;
+        const options = { printWidth, ...indentation };
+        const output = await format(source, options);
+        assert.equal(output, await prettier.format(source, { parser: 'html', ...options }));
+        assert.equal(await format(output, options), output);
+      });
+    }
+  }
+
+  it('keeps short text inline and wraps HTML independently of proseWrap', async () => {
+    assert.equal(await format('<p>Hello world.</p>'), '<p>Hello world.</p>\n');
+    const source = `<p>${issue32Text}</p>`;
+    for (const proseWrap of ['always', 'never', 'preserve']) {
+      for (const htmlWhitespaceSensitivity of ['css', 'ignore']) {
+        const options = { printWidth: 120, proseWrap, htmlWhitespaceSensitivity };
+        const output = await format(source, options);
+        assert.equal(output, await prettier.format(source, { parser: 'html', ...options }));
+        assert.equal(await format(output, options), output);
+      }
+    }
+  });
+
+  it('wraps text around variables without separating glued words or punctuation', async () => {
+    const source = `<p>Hello {{name}}, welcome to the ${issue32Text} prefix{{suffix}}!</p>`;
+    const options = { printWidth: 60 };
+    const output = await format(source, options);
+    assert.equal(output.includes('{{ name }},'), true);
+    assert.equal(output.includes('prefix{{ suffix }}!'), true);
+    assert.equal(output.trimEnd().split('\n').every((line) => line.length <= options.printWidth), true);
+    const renderText = (template) => nunjucks.renderString(template, { name: 'Lasse', suffix: 'tail' })
+      .replace(/<\/?p>/g, '').replace(/\s+/g, ' ').trim();
+    assert.equal(renderText(output), renderText(source));
+    assert.equal(await format(output, options), output);
+  });
+
+  it('does not add boundary spaces while wrapping inline template content', async () => {
+    const source = `<a>prefix{{suffix}} ${issue32Text} tail!</a>`;
+    const options = { printWidth: 60 };
+    const output = await format(source, options);
+    assert.equal(output.startsWith('<a>prefix{{ suffix }} '), true);
+    assert.equal(output.trimEnd().endsWith('tail!</a>'), true);
+    assert.equal(output.trimEnd().split('\n').every((line) => line.length <= options.printWidth), true);
+    assert.equal(await format(output, options), output);
+  });
+
+  it('does not split unbreakable words or non-breaking-space entities', async () => {
+    const longWord = 'x'.repeat(100);
+    const output = await format(`<p>Before ${longWord} two&nbsp;words after</p>`, { printWidth: 30 });
+    assert.equal(output.includes(longWord), true);
+    assert.equal(output.includes('two&nbsp;words'), true);
+    assert.equal(await format(output, { printWidth: 30 }), output);
+  });
+
+  it('preserves whitespace-sensitive text and raw blocks regardless of printWidth', async () => {
+    for (const tag of ['pre', 'textarea']) {
+      const source = `<${tag}>  ${issue32Text}\n    second   line\n</${tag}>`;
+      assert.equal(await format(source, { printWidth: 40 }), `${source}\n`);
+    }
+    const source = `{% raw %}<p>${issue32Text}</p>{% endraw %}`;
+    assert.equal(await format(source, { printWidth: 40 }), `${source}\n`);
+  });
+
   it('keeps adjacent standalone blocks separated', async () => {
     const source = `{% if page_obj.number > 2 %}
 <li class="page-item">
