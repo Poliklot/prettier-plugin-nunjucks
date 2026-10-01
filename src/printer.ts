@@ -428,6 +428,7 @@ function shouldPreserveLargeMinifiedCss(content: string): boolean {
 function printProgram(path: AstPath<Program>, options: ParserOptions, print: (path: AstPath) => Doc): Doc {
   const parts: Doc[] = [];
   const nodes: Node[] = [];
+  const standaloneIndents = new Map<Node, string>();
   const isRootProgram = !path.getParentNode();
   let rootFragmentDepth = 0;
 
@@ -452,12 +453,12 @@ function printProgram(path: AstPath<Program>, options: ParserOptions, print: (pa
     } else if (isRootProgram && shouldPreserveRootClosingTagIndent(childNode)) {
       const standaloneIndent = getOriginalStandaloneIndent(childNode, options);
       if (standaloneIndent) {
-        doc = concat([standaloneIndent, doc]);
+        standaloneIndents.set(childNode, standaloneIndent);
       }
     } else if (isRootProgram && shouldPreserveRootHandlebarsIndent(childNode)) {
       const standaloneIndent = getOriginalStandaloneIndent(childNode, options);
       if (standaloneIndent && !docBreaks(doc)) {
-        doc = concat([standaloneIndent, doc]);
+        standaloneIndents.set(childNode, standaloneIndent);
       }
     }
 
@@ -505,11 +506,15 @@ function printProgram(path: AstPath<Program>, options: ParserOptions, print: (pa
     parts[parts.length - 1] = lastPart.replace(/\n+$/, '');
   }
 
-  if (canPrintRootInlineTextTemplate(nodes, options)) {
-    return concat([stringifyInlineChildren(nodes, options), hardline]);
+  if (canPrintInlineTextProgram(nodes, options)) {
+    return concat([joinInlineChildren(nodes, parts), hardline]);
   }
 
-  return concat([join(hardline, parts), hardline]);
+  const standaloneParts = parts.map((doc, index) => {
+    const originalIndent = standaloneIndents.get(nodes[index]);
+    return originalIndent ? concat([originalIndent, doc]) : doc;
+  });
+  return concat([join(hardline, standaloneParts), hardline]);
 }
 
 function getOriginalStandaloneIndent(node: Node, options: ParserOptions): string {
@@ -579,39 +584,6 @@ function getHtmlClosingTagName(node: Node): string | null {
   const value = getUnmatchedRaw(node) || getTextValue(node);
   const match = value.match(/^<\/([A-Za-z][\w:-]*)\s*>$/u);
   return match ? match[1].toLowerCase() : null;
-}
-
-function canPrintRootInlineTextTemplate(nodes: Node[], options: ParserOptions): boolean {
-  return (
-    nodes.some((node) => node.type === 'TextNode') &&
-    nodes.every((node, index) => isRootInlineTextTemplateChild(node, index, nodes, options))
-  );
-}
-
-function isRootInlineTextTemplateChild(node: Node, index: number, nodes: Node[], options: ParserOptions): boolean {
-  if (node.type === 'MustacheStatement' || node.type === 'PartialStatement' || node.type === 'DecoratorStatement') {
-    return true;
-  }
-
-  if (node.type === 'BlockStatement') {
-    return canInlineBlock(node as BlockStatement, options, 'Program');
-  }
-
-  if (node.type === 'CommentStatement') {
-    const comment = node as CommentStatement;
-    return !comment.block && !comment.multiline;
-  }
-
-  if (node.type !== 'TextNode') {
-    return false;
-  }
-
-  const text = node as TextNode;
-  if (text.verbatim || text.blankLines || /[\r\n]/.test(text.value) || hasLineBreak(text.leadingWhitespace)) {
-    return false;
-  }
-
-  return !hasLineBreak(text.trailingWhitespace) || index === nodes.length - 1;
 }
 
 function hasLineBreak(value: string | undefined): boolean {
@@ -1446,7 +1418,7 @@ function printBlockBody(children: Node[], docs: Doc[], options: ParserOptions): 
   }
 
   if (canPrintInlineTextProgram(children, options)) {
-    return concat([indent(concat([hardline, stringifyInlineChildren(children, options)])), hardline]);
+    return concat([indent(concat([hardline, joinInlineChildren(children, docs)])), hardline]);
   }
 
   return concat([indent(concat([hardline, join(hardline, docs)])), hardline]);
@@ -1455,11 +1427,11 @@ function printBlockBody(children: Node[], docs: Doc[], options: ParserOptions): 
 function canPrintInlineTextProgram(nodes: Node[], options: ParserOptions): boolean {
   return (
     nodes.some((node) => node.type === 'TextNode') &&
-    nodes.every((node, index) => isInlineTextProgramChild(node, index, nodes, options))
+    nodes.every((node) => isInlineTextProgramChild(node, options))
   );
 }
 
-function isInlineTextProgramChild(node: Node, index: number, nodes: Node[], options: ParserOptions): boolean {
+function isInlineTextProgramChild(node: Node, options: ParserOptions): boolean {
   if (node.type === 'MustacheStatement' || node.type === 'PartialStatement' || node.type === 'DecoratorStatement') {
     return true;
   }
@@ -1478,14 +1450,7 @@ function isInlineTextProgramChild(node: Node, index: number, nodes: Node[], opti
   }
 
   const text = node as TextNode;
-  if (text.verbatim || text.blankLines || /[\r\n]/.test(text.value)) {
-    return false;
-  }
-
-  const leadingBreakAllowed = index === 0 || !hasLineBreak(text.leadingWhitespace);
-  const trailingBreakAllowed = index === nodes.length - 1 || !hasLineBreak(text.trailingWhitespace);
-
-  return leadingBreakAllowed && trailingBreakAllowed;
+  return !text.verbatim && !text.blankLines;
 }
 
 function stringifyInlineChildren(nodes: Node[], options?: ParserOptions): string {
