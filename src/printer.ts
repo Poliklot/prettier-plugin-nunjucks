@@ -870,10 +870,12 @@ function printElement(path: AstPath<ElementNode>, options: ParserOptions, print:
     return concat([openDoc, indent(concat([hardline, childrenDocs[0]])), hardline, closeDoc]);
   }
 
-  const canInlineSimpleChildren =
+  const canPrintSimpleTextFlow =
     simpleInlineChildren &&
     !childrenDocs.some(docBreaks) &&
-    !mustacheInsideBlock &&
+    !mustacheInsideBlock;
+  const canInlineSimpleChildren =
+    canPrintSimpleTextFlow &&
     openTagFitsInline &&
     currentIndentLength + getSimpleInlineElementLength(node, sortedAttributes, options) <= getPrintWidth(options);
 
@@ -881,13 +883,17 @@ function printElement(path: AstPath<ElementNode>, options: ParserOptions, print:
     return concat([openDoc, joinInlineChildren(node.children as Node[], childrenDocs), closeDoc]);
   }
 
-  if (shouldPreserveSimpleInlineText(node, childrenDocs, mustacheInsideBlock)) {
+  if (canPrintSimpleTextFlow) {
     const contents = joinInlineChildren(node.children, childrenDocs);
-    const last = contents.parts.length - 1;
-    // Wrap only existing spaces; do not introduce whitespace at inline tag
-    // boundaries. Include the closing tag in the final word's width.
-    contents.parts[last] = concat([contents.parts[last], closeDoc]);
-    return concat([openDoc, indent(contents)]);
+    // The shared inline-content set includes paragraphs, but <p> has block
+    // boundaries. Only actual inline elements must keep their tag edges glued.
+    if (isInlineContentTag(node.tag) && node.tag.toLowerCase() !== 'p') {
+      const last = contents.parts.length - 1;
+      contents.parts[last] = concat([contents.parts[last], closeDoc]);
+      return concat([openDoc, indent(contents)]);
+    }
+
+    return concat([openDoc, indent(concat([hardline, contents])), hardline, closeDoc]);
   }
 
   const canInlineMixedChildren =
@@ -1517,20 +1523,6 @@ function getSimpleInlineElementLength(node: ElementNode, attributes: ElementAttr
   const childrenLength = stringifyInlineChildren(node.children as Node[], options).length;
 
   return getInlineOpenTagLength(node, attributes, options) + childrenLength + `</${node.tag}>`.length;
-}
-
-function shouldPreserveSimpleInlineText(node: ElementNode, childrenDocs: Doc[], mustacheInsideBlock: boolean): boolean {
-  return (
-    isInlineContentTag(node.tag) &&
-    node.children.some((child) => child.type === 'MustacheStatement') &&
-    node.children.every(
-      (child) =>
-        (child.type === 'TextNode' && !(child as TextNode).verbatim && !(child as TextNode).blankLines) ||
-        child.type === 'MustacheStatement',
-    ) &&
-    !childrenDocs.some(docBreaks) &&
-    !mustacheInsideBlock
-  );
 }
 
 function isInlineContentTag(tag: string): boolean {
