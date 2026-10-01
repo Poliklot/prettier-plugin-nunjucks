@@ -41,8 +41,9 @@ describe('source whitespace between adjacent inline expressions', () => {
 });
 const paragraph = 'Lorem ipsum {{ dolor }} sit, amet consectetur adipisicing elit.';
 const blockParagraph = 'Lorem ipsum dolor sit amet {{ consectetur }} adipisicing elit. Eius odit blanditiis nobis temporibus voluptatem nihil aliquid cum velit saepe debitis sunt rerum totam quos et enim, quas, odio, ex consectetur!';
+// Remove only these fixtures' literal wrapper tags, not arbitrary HTML.
 const renderText = (source, values = { dolor: 'dolor', suffix: 'tail' }) =>
-  nunjucks.renderString(source, values).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  nunjucks.renderString(source, values).replace(/<\/?(?:main|section|p|div|a|span)>/g, '').replace(/\s+/g, ' ').trim();
 
 async function assertStable(source, options, expected) {
   const output = await format(source, options);
