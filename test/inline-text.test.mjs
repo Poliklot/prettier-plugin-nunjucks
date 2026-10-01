@@ -7,6 +7,38 @@ import * as plugin from '../dist/plugin.js';
 const format = (source, options = {}) => prettier.format(source, {
   parser: 'nunjucks', plugins: [plugin], ...options,
 });
+
+describe('source whitespace between adjacent inline expressions', () => {
+  for (const separator of ['', ' ', '\n  ']) {
+    for (const container of ['p', 'div', 'block', 'root']) {
+      it(`preserves ${JSON.stringify(separator)} between adjacent variables in ${container}`, async () => {
+        const text = `${paragraph} {{ one }}${separator}{{ two }} tail.`;
+        const source = container === 'root' ? text : container === 'block'
+          ? `{% block foo %}${text}{% endblock %}`
+          : `<${container}>${text}</${container}>`;
+        const output = await assertStable(source, { printWidth: 40 });
+        const context = { dolor: 'dolor', one: 'one', two: 'two' };
+        assert.equal(renderText(output, context), renderText(source, context));
+        if (!separator) assert.ok(output.includes('{{ one }}{{ two }}'));
+      });
+    }
+  }
+
+  it('preserves glued expressions inside a short inline template block', async () => {
+    const source = '{% block foo %}Hi {{ one }}{{ two }}!{% endblock %}';
+    await assertStable(source, { printWidth: 120 }, `${source}\n`);
+  });
+
+  for (const endOfLine of ['lf', 'crlf', 'cr']) {
+    it(`uses the correct source offsets with ${endOfLine} line endings`, async () => {
+      const source = '<div>\nLorem ipsum {{ one }}\n{{ two }} sit, amet consectetur adipisicing elit.\n</div>';
+      const eol = endOfLine === 'crlf' ? '\r\n' : endOfLine === 'cr' ? '\r' : '\n';
+      const input = source.replaceAll('\n', eol);
+      const output = await assertStable(input, { printWidth: 40, endOfLine });
+      assert.equal(renderText(output, { one: 'one', two: 'two' }), renderText(input, { one: 'one', two: 'two' }));
+    });
+  }
+});
 const paragraph = 'Lorem ipsum {{ dolor }} sit, amet consectetur adipisicing elit.';
 const blockParagraph = 'Lorem ipsum dolor sit amet {{ consectetur }} adipisicing elit. Eius odit blanditiis nobis temporibus voluptatem nihil aliquid cum velit saepe debitis sunt rerum totam quos et enim, quas, odio, ex consectetur!';
 const renderText = (source, values = { dolor: 'dolor', suffix: 'tail' }) =>

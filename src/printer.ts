@@ -507,7 +507,7 @@ function printProgram(path: AstPath<Program>, options: ParserOptions, print: (pa
   }
 
   if (canPrintInlineTextProgram(nodes, options)) {
-    return concat([joinInlineChildren(nodes, parts), hardline]);
+    return concat([joinInlineChildren(nodes, parts, options), hardline]);
   }
 
   const standaloneParts = parts.map((doc, index) => {
@@ -852,11 +852,11 @@ function printElement(path: AstPath<ElementNode>, options: ParserOptions, print:
     currentIndentLength + getSimpleInlineElementLength(node, sortedAttributes, options) <= getPrintWidth(options);
 
   if (canInlineSimpleChildren) {
-    return concat([openDoc, joinInlineChildren(node.children as Node[], childrenDocs), closeDoc]);
+    return concat([openDoc, joinInlineChildren(node.children as Node[], childrenDocs, options), closeDoc]);
   }
 
   if (canPrintSimpleTextFlow) {
-    const contents = joinInlineChildren(node.children, childrenDocs);
+    const contents = joinInlineChildren(node.children, childrenDocs, options);
     // The shared inline-content set includes paragraphs, but <p> has block
     // boundaries. Only actual inline elements must keep their tag edges glued.
     if (isInlineContentTag(node.tag) && node.tag.toLowerCase() !== 'p') {
@@ -878,7 +878,7 @@ function printElement(path: AstPath<ElementNode>, options: ParserOptions, print:
     currentIndentLength + getSimpleInlineElementLength(node, sortedAttributes, options) <= getPrintWidth(options);
 
   if (canInlineMixedChildren) {
-    return concat([openDoc, joinInlineChildren(node.children as Node[], childrenDocs), closeDoc]);
+    return concat([openDoc, joinInlineChildren(node.children as Node[], childrenDocs, options), closeDoc]);
   }
 
   const inner =
@@ -1349,14 +1349,14 @@ function stringifyInlineChild(node: Node, options?: ParserOptions): string {
         return stringifySimpleInlineElement(element, sortedAttributes, sortOptions);
       }
 
-      return stringifyNode(node);
+      return stringifyNode(node, options);
     }
     default:
-      return stringifyNode(node);
+      return stringifyNode(node, options);
   }
 }
 
-function shouldInsertInlineSeparator(left: Node, right: Node): boolean {
+function shouldInsertInlineSeparator(left: Node, right: Node, options?: ParserOptions): boolean {
   if (left.type === 'TextNode' && hasInlineBoundaryWhitespace((left as TextNode).trailingWhitespace)) {
     return true;
   }
@@ -1369,14 +1369,25 @@ function shouldInsertInlineSeparator(left: Node, right: Node): boolean {
     return false;
   }
 
-  return left.type !== 'TextNode' && right.type !== 'TextNode';
+  if (left.type === 'TextNode' || right.type === 'TextNode') {
+    return false;
+  }
+
+  // Whitespace-only slices between expressions do not become text nodes.
+  // Consult their source ranges rather than inventing a separator.
+  const originalText = (options as { originalText?: string } | undefined)?.originalText;
+  if (originalText !== undefined && left.range && right.range) {
+    return hasInlineBoundaryWhitespace(originalText.slice(left.range[1], right.range[0]));
+  }
+
+  return true;
 }
 
 function shouldAttachExpandedChild(left: Node | undefined, right: Node): boolean {
   return Boolean(left) && (isPunctuationOnlyTextNode(left) || isPunctuationOnlyTextNode(right));
 }
 
-function joinInlineChildren(nodes: Node[], docs: Doc[]): ReturnType<typeof fill> {
+function joinInlineChildren(nodes: Node[], docs: Doc[], options: ParserOptions): ReturnType<typeof fill> {
   const parts: Doc[] = [];
 
   docs.forEach((doc, index) => {
@@ -1387,7 +1398,7 @@ function joinInlineChildren(nodes: Node[], docs: Doc[]): ReturnType<typeof fill>
       : [doc];
     if (index === 0) {
       parts.push(...childParts);
-    } else if (shouldInsertInlineSeparator(nodes[index - 1], nodes[index])) {
+    } else if (shouldInsertInlineSeparator(nodes[index - 1], nodes[index], options)) {
       parts.push(line, ...childParts);
     } else {
       const last = parts.pop() ?? '';
@@ -1418,7 +1429,7 @@ function printBlockBody(children: Node[], docs: Doc[], options: ParserOptions): 
   }
 
   if (canPrintInlineTextProgram(children, options)) {
-    return concat([indent(concat([hardline, joinInlineChildren(children, docs)])), hardline]);
+    return concat([indent(concat([hardline, joinInlineChildren(children, docs, options)])), hardline]);
   }
 
   return concat([indent(concat([hardline, join(hardline, docs)])), hardline]);
@@ -1455,7 +1466,7 @@ function isInlineTextProgramChild(node: Node, options: ParserOptions): boolean {
 
 function stringifyInlineChildren(nodes: Node[], options?: ParserOptions): string {
   return nodes.reduce((result, child, index) => {
-    const separator = index > 0 && shouldInsertInlineSeparator(nodes[index - 1], child) ? ' ' : '';
+    const separator = index > 0 && shouldInsertInlineSeparator(nodes[index - 1], child, options) ? ' ' : '';
     return `${result}${separator}${stringifyInlineChild(child, options)}`;
   }, '');
 }
@@ -1555,7 +1566,7 @@ function canInlineBlock(
     return false;
   }
 
-  return stringifyNode(node as Node).length <= getPrintWidth(options);
+  return stringifyNode(node as Node, options).length <= getPrintWidth(options);
 }
 
 function hasOriginalLineBreak(node: Node, options: ParserOptions): boolean {
@@ -1565,7 +1576,7 @@ function hasOriginalLineBreak(node: Node, options: ParserOptions): boolean {
   return Boolean(range && originalText && /[\r\n]/.test(originalText.slice(range[0], range[1])));
 }
 
-function stringifyNode(node: Node): string {
+function stringifyNode(node: Node, options?: ParserOptions): string {
   switch (node.type) {
     case 'TextNode':
       return (node as TextNode).value;
@@ -1601,7 +1612,7 @@ function stringifyNode(node: Node): string {
         getTrimOpen(block),
         getTrimClose(block),
       );
-      const program = stringifyInlineChildren(block.program.body as Node[]);
+      const program = stringifyInlineChildren(block.program.body as Node[], options);
       const inverseChain = (block.inverseChain ?? [])
         .map((branch) => {
           const branchExpression = buildExpression(branch);
@@ -1610,7 +1621,7 @@ function stringifyNode(node: Node): string {
             getTrimOpen(branch),
             getTrimClose(branch),
           );
-          return `${openBranch}${stringifyInlineChildren(branch.program.body as Node[])}`;
+          return `${openBranch}${stringifyInlineChildren(branch.program.body as Node[], options)}`;
         })
         .join('');
       const inverse = block.inverse.body.length > 0
@@ -1618,7 +1629,7 @@ function stringifyNode(node: Node): string {
             templateDialect.getElseKeyword(),
             block.inverseTrimOpen ? '-' : '',
             block.inverseTrimClose ? '-' : '',
-          )}${stringifyInlineChildren(block.inverse.body as Node[])}`
+          )}${stringifyInlineChildren(block.inverse.body as Node[], options)}`
         : '';
       const close = buildTemplateTag(
         templateDialect.getBlockClosePrefix(block.path),
@@ -1634,11 +1645,11 @@ function stringifyNode(node: Node): string {
       if (element.selfClosing) {
         return open;
       }
-      const children = element.children.map((child) => stringifyNode(child as Node)).join('');
+      const children = element.children.map((child) => stringifyNode(child as Node, options)).join('');
       return `${open}${children}</${element.tag}>`;
     }
     case 'Program':
-      return (node as Program).body.map((child) => stringifyNode(child as Node)).join('');
+      return (node as Program).body.map((child) => stringifyNode(child as Node, options)).join('');
     case 'UnmatchedNode':
       return (node as UnmatchedNode).raw;
     default:
@@ -1936,7 +1947,7 @@ function printBlock(path: AstPath<BlockStatement>, options: ParserOptions, print
   const parentNode = path.getParentNode() as Node | undefined;
 
   if (canInlineBlock(node, options, parentNode?.type)) {
-    return stringifyNode(node as Node);
+    return stringifyNode(node as Node, options);
   }
 
   const open = printBlockOpen(node, options);
