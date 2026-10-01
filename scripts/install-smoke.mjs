@@ -9,6 +9,25 @@ const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const prettierBin = process.platform === 'win32' ? path.join('node_modules', '.bin', 'prettier.cmd') : path.join('node_modules', '.bin', 'prettier');
 const prettierVersion = process.env.PRETTIER_VERSION || 'latest';
 const keepTemp = process.env.KEEP_INSTALL_SMOKE === '1';
+const inlineText = 'Lorem ipsum {{ dolor }} sit, amet consectetur adipisicing elit.';
+const wrappedText = '  Lorem ipsum {{ dolor }} sit, amet\n  consectetur adipisicing elit.';
+const textFlowCases = [
+  {
+    file: 'inline.njk',
+    source: `<p>${inlineText}</p>\n\n<div>${inlineText}</div>`,
+    expected: `<p>\n${wrappedText}\n</p>\n\n<div>\n${wrappedText}\n</div>\n`,
+  },
+  {
+    file: 'block.nunjucks',
+    source: `{% block foo %}${inlineText}{% endblock %}`,
+    expected: `{% block foo %}\n${wrappedText}\n{% endblock %}\n`,
+  },
+  {
+    file: 'root.nunj',
+    source: inlineText,
+    expected: 'Lorem ipsum {{ dolor }} sit, amet\nconsectetur adipisicing elit.\n',
+  },
+];
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: options.cwd, env: { ...process.env, ...options.env }, stdio: 'inherit' });
@@ -31,6 +50,9 @@ try {
   await fs.writeFile(path.join(projectRoot, '.prettierrc.cjs'), ['module.exports = {', '  plugins: ["prettier-plugin-nunjucks"],', '};', ''].join('\n'));
   await fs.writeFile(path.join(projectRoot, 'sample.njk'), '{% if page_obj.number > 2 %}\n<li class="page-item"><a href="{{ url }}">{{page_obj.number}}</a></li>\n{% endif %}\n\n{% if page_obj.number > 1 %}<li>{{page_obj.number}}</li>{% endif %}');
   await fs.writeFile(path.join(projectRoot, 'prose.njk'), '<p>Lorem ipsum dolor sit amet consectetur adipisicing elit. Eum laborum quis commodi quia adipisci voluptates, labore, repellat provident inventore excepturi consequatur quos rerum sunt ipsa nostrum, voluptatum molestias corrupti temporibus!</p>');
+  for (const fixture of textFlowCases) {
+    await fs.writeFile(path.join(projectRoot, fixture.file), fixture.source);
+  }
 
   run(npmCommand, ['install', '--save-dev', `prettier@${prettierVersion}`, path.join(smokeRoot, tarball)], { cwd: projectRoot, env: { npm_config_cache: npmCache } });
   run(path.join(projectRoot, prettierBin), ['--write', 'sample.njk'], { cwd: projectRoot });
@@ -55,6 +77,13 @@ try {
   if (prose !== expectedProse) {
     console.error('Paragraph wrapping does not match the issue #32 example.');
     process.exit(1);
+  }
+  for (const fixture of textFlowCases) {
+    run(path.join(projectRoot, prettierBin), ['--write', fixture.file, '--print-width', '40'], { cwd: projectRoot });
+    run(path.join(projectRoot, prettierBin), ['--check', fixture.file, '--print-width', '40'], { cwd: projectRoot });
+    if (await fs.readFile(path.join(projectRoot, fixture.file), 'utf8') !== fixture.expected) {
+      throw new Error(`Inline text wrapping does not match issue #37 in ${fixture.file}.`);
+    }
   }
   console.log(`Install smoke passed with prettier@${prettierVersion}.`);
 } finally {

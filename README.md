@@ -134,6 +134,12 @@ wrapping, just as with Prettier's HTML printer.
 and whitespace-sensitive content such as `pre`, `textarea`, and raw/verbatim blocks
 may remain longer than it.
 
+Text and inline variables wrap as one text flow inside HTML block elements such
+as `p` and `div`, Nunjucks block bodies, and the template root. Configured
+`inlineTags` participate in the same flow. Existing line breaks in ordinary text
+do not force variables onto separate lines or disable wrapping. Actual inline
+HTML elements such as `a` and `span` retain their significant tag boundaries.
+
 ### `classAttributeLayout`
 
 Control whether `class` attribute values may use multiple physical lines. The default `auto` mode preserves the existing formatting rules. Use `single-line` to keep static and conditional class values on one line; the surrounding HTML tag may still wrap.
