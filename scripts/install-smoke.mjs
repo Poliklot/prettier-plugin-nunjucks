@@ -20,12 +20,12 @@ const textFlowCases = [
   {
     file: 'block.nunjucks',
     source: `{% block foo %}${inlineText}{% endblock %}`,
-    expected: `{% block foo %}\n${wrappedText}\n{% endblock %}\n`,
+    expected: `{% block foo %}${inlineText}{% endblock %}\n`,
   },
   {
     file: 'root.nunj',
     source: inlineText,
-    expected: 'Lorem ipsum {{ dolor }} sit, amet\nconsectetur adipisicing elit.\n',
+    expected: `${inlineText}\n`,
   },
 ];
 

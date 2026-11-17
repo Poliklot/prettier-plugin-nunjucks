@@ -126,16 +126,12 @@ describe('inline HTML text from issue #37', () => {
 
 describe('inline template text from issue #37', () => {
   for (const variable of [true, false]) {
-    it(`wraps the second example ${variable ? 'with' : 'without'} a variable regardless of source line breaks`, async () => {
+    it(`keeps the second example ${variable ? 'with' : 'without'} a variable while preserving source line breaks`, async () => {
       const text = variable ? blockParagraph : blockParagraph.replace('{{ consectetur }}', 'consectetur');
-      const expectedText = variable
-        ? '  Lorem ipsum dolor sit amet {{ consectetur }} adipisicing elit. Eius odit blanditiis nobis temporibus voluptatem nihil\n  aliquid cum velit saepe debitis sunt rerum totam quos et enim, quas, odio, ex consectetur!'
-        : '  Lorem ipsum dolor sit amet consectetur adipisicing elit. Eius odit blanditiis nobis temporibus voluptatem nihil\n  aliquid cum velit saepe debitis sunt rerum totam quos et enim, quas, odio, ex consectetur!';
-      const expected = `{% block foo %}\n${expectedText}\n{% endblock %}\n`;
       for (const body of [text, `\n  ${text}\n`, `\n  ${text.replace('Lorem ', 'Lorem\n  ')}\n`]) {
         const source = `{% block foo %}${body}{% endblock %}`;
-        const output = await assertStable(source, { printWidth: 120 }, expected);
-        assert.equal(renderText(output, { consectetur: 'consectetur' }), renderText(source, { consectetur: 'consectetur' }));
+        const output = await assertStable(source, { printWidth: 120 }, source + '\n');
+        assert.equal(nunjucks.renderString(output, { consectetur: 'consectetur' }), nunjucks.renderString(source + '\n', { consectetur: 'consectetur' }));
       }
     });
   }
@@ -149,32 +145,32 @@ describe('inline template text from issue #37', () => {
 {% endblock %}\n`);
   });
 
-  it('wraps configured custom inline tags inside template blocks', async () => {
+  it('preserves text around custom inline tags inside template blocks', async () => {
     const text = blockParagraph.replace('{{ consectetur }}', '{% inlinevalue %}');
     const options = { printWidth: 120, inlineTags: ['inlinevalue'] };
     const output = await assertStable(`{% block foo %}${text}{% endblock %}`, options);
     assert.ok(output.includes('Lorem ipsum dolor sit amet {% inlinevalue %} adipisicing elit.'));
-    assert.ok(output.trimEnd().split('\n').every((line) => line.length <= options.printWidth));
-    assert.equal(await format(`{% block foo %}${text.replace('Lorem ', 'Lorem\n')}{% endblock %}`, options), output);
+    assert.equal(output, `{% block foo %}${text}{% endblock %}\n`);
+    assert.equal(await format(`{% block foo %}${text.replace('Lorem ', 'Lorem\n')}{% endblock %}`, options), `{% block foo %}${text.replace('Lorem ', 'Lorem\n')}{% endblock %}\n`);
   });
 
-  it('wraps text on the template root without separating glued variables', async () => {
+  it('preserves root text without reflowing its rendered lines', async () => {
     const source = `prefix{{ suffix }} ${blockParagraph} tail{{ suffix }}!`;
     const options = { printWidth: 60 };
     const output = await assertStable(source, options);
     assert.ok(output.includes('prefix{{ suffix }}'));
     assert.ok(output.includes('tail{{ suffix }}!'));
-    assert.ok(output.trimEnd().split('\n').every((line) => line.length <= options.printWidth));
+    assert.equal(output, source + '\n');
     assert.equal(renderText(output), renderText(source));
-    assert.equal(await format(source.replace('Lorem ', 'Lorem\n'), options), output);
+    assert.equal(await format(source.replace('Lorem ', 'Lorem\n'), options), source.replace('Lorem ', 'Lorem\n') + '\n');
   });
 
-  it('does not carry standalone variable indentation into a root text flow', async () => {
+  it('preserves significant standalone variable indentation in root text', async () => {
     const source = 'Hello\n  {{ name }}\n  friend welcome to the amazing world of templating.';
     const options = { printWidth: 40 };
-    const expected = await format(source.replace(/\s+/g, ' '), options);
+    const expected = source + '\n';
     await assertStable(source, options, expected);
-    await assertStable(`\n\n${source}\n\n`, options, expected);
+    await assertStable(`\n\n${source}\n\n`, options, `\n\n${source}\n\n`);
   });
 
   for (const printWidth of [40, 60, 120]) {
@@ -186,11 +182,10 @@ describe('inline template text from issue #37', () => {
         const output = await assertStable(source, options);
         assert.ok(output.includes('prefix{{ suffix }}'));
         assert.ok(output.includes('tail{{ suffix }}!'));
-        assert.ok(output.trimEnd().split('\n').every((line) =>
-          line.replace(/^\t+/, (tabs) => ' '.repeat(tabs.length * indentation.tabWidth)).length <= printWidth));
+        assert.equal(output, source + '\n');
         for (const values of [{ enabled: true }, { enabled: false, alternative: true }, { enabled: false, alternative: false }]) {
           const context = { dolor: 'dolor', suffix: 'tail', ...values };
-          assert.equal(renderText(output, context), renderText(source, context));
+          assert.equal(nunjucks.renderString(output, context), nunjucks.renderString(source + '\n', context));
         }
       });
     }

@@ -3,6 +3,22 @@ import { describe, it } from 'node:test';
 import { nunjucksDialect } from '../dist/dialects/nunjucks/tokens.js';
 
 describe('nunjucks dialect tokens', () => {
+  it('recognizes whitespace control only directly against the delimiters', () => {
+    for (const expression of ['-x', '-1', '-(a + b)', '-a - b']) {
+      const token = nunjucksDialect.parseToken(`{{ ${expression} }}`, 0);
+      assert.equal(token.content, expression);
+      assert.equal(token.trimOpen, false);
+      assert.equal(token.trimClose, false);
+    }
+    const token = nunjucksDialect.parseToken('{{- -x -}}', 0);
+    assert.equal(token.content, '-x');
+    assert.equal(token.trimOpen, true);
+    assert.equal(token.trimClose, true);
+    const comment = nunjucksDialect.parseToken('{# - note - #}', 0);
+    assert.equal(comment.content, '- note -');
+    assert.equal(comment.trimOpen, false);
+    assert.equal(comment.trimClose, false);
+  });
   it('classifies variables, comments, statement tags, blocks, and branches', () => {
     assert.deepEqual({ ...nunjucksDialect.parseToken('{{ value }}', 0), start: 0, end: 0 }, {
       kind: 'mustache',

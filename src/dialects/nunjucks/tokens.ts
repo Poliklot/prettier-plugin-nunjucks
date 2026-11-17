@@ -88,9 +88,9 @@ function parseDelimitedNunjucksToken(
   const end = closeIdx >= 0 ? closeIdx + close.length : text.length;
   const rawContent = text.slice(contentStart, closeIdx >= 0 ? closeIdx : undefined);
   const rawInner = rawContent.trim();
-  const trimOpen = rawInner.startsWith('-');
-  const trimClose = rawInner.endsWith('-');
-  const inner = rawInner.replace(/^-/, '').replace(/-$/, '').trim();
+  const trimOpen = rawContent.startsWith('-');
+  const trimClose = rawContent.endsWith('-');
+  const inner = rawContent.slice(trimOpen ? 1 : 0, trimClose ? -1 : undefined).trim();
   const baseToken = {
     rawContent,
     rawInner,

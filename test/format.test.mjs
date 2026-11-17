@@ -325,12 +325,8 @@ describe('prettier-plugin-nunjucks formatting', () => {
           {% endremote %}`;
     const output = await format(source, { blockTags: ['remote'], forkTags: ['error'] });
 
-    assert.equal(output, `{% remote "/stuff" %}
-  This content will be replaced with the content from /stuff
-{% error %}
-  There was an error fetching /stuff
-{% endremote %}
-`);
+    // Custom blocks may produce text: branch indentation is not disposable.
+    assert.equal(output, source + '\n');
     assert.equal(await format(output, { blockTags: ['remote'], forkTags: ['error'] }), output);
   });
 
