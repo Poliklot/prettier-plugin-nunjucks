@@ -10,6 +10,13 @@
 * Preserve exact raw source on disabled/rejected embedding; preserve required dynamic JS key quotes, expression grouping, literal markers and string whitespace. Some formerly formatted unquoted template fragments now use conservative fallback.
 * See `docs/shared-embedding.md` and Poliklot/template-format-core#2 for the coordinated dependency and release gates.
 
+## [0.2.4](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.2.3...prettier-plugin-nunjucks-v0.2.4) (2026-11-17)
+
+
+### Bug Fixes
+
+* сохранён результат выполнения шаблонов Nunjucks ([5638454](https://github.com/Poliklot/prettier-plugin-nunjucks/commit/56384541e6ba9c9cac5e27d5a61c24551b5efa50))
+
 ## [0.2.3](https://github.com/Poliklot/prettier-plugin-nunjucks/compare/prettier-plugin-nunjucks-v0.2.2...prettier-plugin-nunjucks-v0.2.3) (2026-10-01)
 
 
